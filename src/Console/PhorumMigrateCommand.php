@@ -180,7 +180,6 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$p_forum_id = (int) $p_forum['forum_id'] ?? 0;
 			$p_forum_name = $p_forum['name'] ?? '';
 			$p_forum_description = $p_forum['description'] ?? '';
-			$p_forum_parent_id = (int) $p_forum['parent_id'] ?? 0;
 			$tag_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, $p_forum_id);
 			$existing = false;
 			if (null === $tag_id) {
@@ -207,13 +206,24 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	 */
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
-		$p_thread_starting_messages = $connector->getThreadStartingMessages(10);
+		$p_thread_starting_messages = $connector->getThreadStartingMessages(50);
 		$discussions = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
 			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;
 			$p_thread_id = $p_msg['thread'] ?? null;
 			$p_user_id = (int) $p_msg['user_id'] ?? null;
 			$p_subject = (string) $p_msg['subject'] ?? '';
+			/**
+			 * Phorum's message's status can be either..
+			 * 2 = PHORUM_STATUS_APPROVED
+			 * -1 = PHORUM_STATUS_HOLD
+			 * -2 = PHORUM_STATUS_HIDDEN
+			 */
+			$p_status_int = (int) $p_msg['status'] ?? 2;
+			// Phorum thread is sticky if it's starting message is marked to have own special sort value
+			$p_message_is_sticky = $p_msg['sort'] == 1;
+			// Phorum thread is locked if it's starting message is marked to have 'closed' attribute
+			$p_message_is_locked = $p_msg['closed'] == 1;
 			$discussion_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $p_thread_id);
 			$author_user = $users[$p_user_id] ?? null;
 			if (null === $author_user) {
@@ -223,7 +233,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			}
 			$tag = $tags[$p_forum_id] ?? null;
 			if (null === $tag) {
-				$this->logger->critical('Unknown Phorum forum id id', ['forum_id' => $p_forum_id]);
+				$this->logger->critical('Unknown Phorum forum id', ['forum_id' => $p_forum_id]);
 				continue;
 			}
 
@@ -232,19 +242,28 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				// Not found, create
 				$discussion = new Discussion();
 				$discussion->rename($p_subject);
+				$discussion->setAttribute('is_sticky', $p_message_is_sticky);
+				$discussion->setAttribute('is_locked', $p_message_is_locked);
+				$this->output->writeln("discussion \"{$p_subject}\" is: " . ($p_message_is_locked ? 'locked' : 'open'));
 				$discussion->setRelation('user', $author_user);
 				// Note: discussion creation timestamp is edited when posts are added
 				$discussion->save();
 				$discussion->refresh();
+
+				// If Phorum message is not approved, set the discussion as hidden
+				if ($p_status_int < 2) {
+					$discussion->hide();
+				}
+
 				$this->output->writeln("Discussion - created new discussion");
+
+				$tag->discussions()->save($discussion);
 			} else {
 				// Found, no need to touch anything
 				$existing = true;
 				$discussion = Discussion::find($discussion_id);
 				$this->output->writeln("Discussion - found old discussion");
 			}
-
-			$tag->discussions()->save($discussion);
 
 			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $p_thread_id, $discussion->id, $existing);
 			$discussions[$p_thread_id] = $discussion;
@@ -291,10 +310,24 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 					continue;
 				}
 			}
+
 			/** @var \Flarum\Post\CommentPost $post */
 			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $p_message_id, $post->id);
-			$posts[$p_message_id] = $post;
+			$posts[] = $post;
 		}
+
+		if (!empty($posts)) {
+			$first_post = reset($posts);
+			$discussion->setFirstPost($first_post);
+			$last_post = end($posts);
+			$discussion->setLastPost($last_post);
+			$discussion->save();
+		}
+		$discussion
+			->refreshCommentCount()
+			->refreshLastPost()
+			->refreshParticipantCount()
+			->save();
 
 		return $posts;
 	}
