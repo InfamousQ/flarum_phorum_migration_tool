@@ -7,7 +7,6 @@ use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
 use Flarum\Console\AbstractCommand;
 use Flarum\Discussion\Discussion;
-use Flarum\Forum\Content\Discussion as ContentDiscussion;
 use Flarum\Group\Group;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
@@ -27,7 +26,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			->setDescription('Migrate data from existing Phorum installation')
 			// Phorum connection arguments
 			->addArgument('host', InputArgument::REQUIRED, 'In which server is Phorum\'s database located? Commonly localhost')
-			->addArgument('db_name', InputArgument::REQUIRED, 'What is the name of database where Phorum data is saved?')
+			->addArgument('db', InputArgument::REQUIRED, 'What is the name of database where Phorum data is saved?')
 			->addArgument('username', InputArgument::REQUIRED, 'Which username can be used to access Phorum database?')
 			->addArgument('password', InputArgument::REQUIRED, 'Which password can be used to access Phorum database?')
 			->addArgument('prefix', InputArgument::OPTIONAL, 'What is the table prefix set for Phorum installation? Not required, default is no prefix.')
@@ -43,7 +42,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 		$phorum_db_host = $this->input->getArgument('host');
 		$phorum_db_username = $this->input->getArgument('username');
 		$phorum_db_password = $this->input->getArgument('password');
-		$phorum_db_name = $this->input->getArgument('db_name');
+		$phorum_db_name = $this->input->getArgument('db');
 		$phorum_db_prefix = $this->input->getArgument('prefix');
 
 		$connector = new Connector(
