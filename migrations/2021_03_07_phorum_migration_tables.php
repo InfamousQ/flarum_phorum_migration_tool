@@ -21,7 +21,9 @@ return [
 		$schema->getConnection()->delete('DELETE FROM groups WHERE id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE) AND id > 4', [PhorumMapping::DATA_TYPE_USER_GROUP]);
 		$schema->getConnection()->delete('DELETE FROM group_user WHERE group_id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE)', [PhorumMapping::DATA_TYPE_USER_GROUP]);
 		$schema->getConnection()->delete('DELETE FROM group_user WHERE user_id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE)', [PhorumMapping::DATA_TYPE_USER]);
+		$schema->getConnection()->delete('DELETE FROM posts WHERE id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE)', [PhorumMapping::DATA_TYPE_MESSAGE]);
 		$schema->getConnection()->delete('DELETE FROM discussions WHERE id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE)', [PhorumMapping::DATA_TYPE_DISCUSSION]);
+		$schema->getConnection()->delete('DELETE FROM tags WHERE id IN (SELECT flarum_id FROM phorum_mapping m WHERE m.phorum_data_type = ? AND existing IS FALSE)', [PhorumMapping::DATA_TYPE_TAG]);
 		$schema->dropIfExists('phorum_mapping');
 	},
 ];
