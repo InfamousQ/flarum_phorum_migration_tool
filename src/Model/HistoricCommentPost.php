@@ -6,7 +6,7 @@ use Carbon\Carbon;
 
 /**
  * HistoricCommentPost
- * Similar as Flarum\Post\CommentPost but overwrites 
+ * Similar as Flarum\Post\CommentPost but overwrites the time of posting.
  */
 class HistoricCommentPost extends \Flarum\Post\CommentPost {
 

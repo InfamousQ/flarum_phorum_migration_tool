@@ -13,7 +13,8 @@ class Connector {
 	public function __construct($host, $db_name, $user = '', $password = '', $prefix = '') {
 		$this->pdo = static::buildPDOInstance( $host, $db_name, $user, $password);
 		$this->table_prefix = $prefix;
-		if (!empty($this->table_prefix) && $this->table_prefix[count($this->table_prefix)] !== '_') {
+		// MySQL table prefixes must have _ character to separate prefix and name
+		if (!empty($this->table_prefix) && substr($this->table_prefix, -1) !== '_') {
 			$this->table_prefix .= '_';
 		}
 	}
@@ -71,7 +72,7 @@ class Connector {
 
 	public function getThreadStartingMessages($limit = null) {
 		try {
-			$p_thread_starting_query = "SELECT forum_id, thread, user_id, subject FROM {$this->table_prefix}messages WHERE parent_id = 0 ORDER BY datestamp";
+			$p_thread_starting_query = "SELECT forum_id, thread, user_id, subject, status, sort, closed FROM {$this->table_prefix}messages WHERE parent_id = 0 ORDER BY datestamp";
 			if (null !== $limit && is_integer($limit)) {
 				$p_thread_starting_query .= " LIMIT {$limit}";
 			}
