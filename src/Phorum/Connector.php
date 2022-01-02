@@ -90,7 +90,7 @@ class Connector {
 	 */
 	public function getThreadMessages(int $thread_id) {
 		try {
-			$p_thread_messages_query = "SELECT message_id, user_id, body, datestamp FROM {$this->table_prefix}messages WHERE thread = {$thread_id}";
+			$p_thread_messages_query = "SELECT message_id, user_id, body, closed, datestamp FROM {$this->table_prefix}messages WHERE thread = {$thread_id}";
 			return $this->pdo->query($p_thread_messages_query);
 		} catch (\PDOException $pdo_exception) {
 			throw new ConnectorException('Could not query thread starting messages from Phorum', 1, $pdo_exception);

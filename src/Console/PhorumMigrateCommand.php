@@ -206,7 +206,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	 */
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
-		$p_thread_starting_messages = $connector->getThreadStartingMessages(50);
+		$p_thread_starting_messages = $connector->getThreadStartingMessages(75);
 		$discussions = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
 			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;
@@ -244,7 +244,6 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				$discussion->rename($p_subject);
 				$discussion->setAttribute('is_sticky', $p_message_is_sticky);
 				$discussion->setAttribute('is_locked', $p_message_is_locked);
-				$this->output->writeln("discussion \"{$p_subject}\" is: " . ($p_message_is_locked ? 'locked' : 'open'));
 				$discussion->setRelation('user', $author_user);
 				// Note: discussion creation timestamp is edited when posts are added
 				$discussion->save();
@@ -290,6 +289,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$p_user_id = $p_msg['user_id'] ?? null;
 			$p_body = $p_msg['body'] ?? '';
 			$p_created = $p_msg['datestamp'] ?? null;
+			$p_is_closed = $p_msg['closed'] == 1;
 
 			$author_user = $users[$p_user_id] ?? null;
 			if (null === $author_user) {
@@ -299,6 +299,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			}
 
 			$post_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $p_message_id);
+			/** @var \Flarum\Post\CommentPost $post */
 			if (null === $post_id) {
 				$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created);
 				$post->save();
@@ -311,8 +312,12 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				}
 			}
 
-			/** @var \Flarum\Post\CommentPost $post */
 			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $p_message_id, $post->id);
+			if ($p_is_closed) {
+				$post
+					->hide()
+					->save();
+			}
 			$posts[] = $post;
 		}
 
