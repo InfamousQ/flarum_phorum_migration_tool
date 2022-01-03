@@ -5,7 +5,7 @@
 	"require": {
 		"flarum/core": ">1.1",
 		"flarum/sticky": ">1.1",
-		"flarum/lock": ">1.1",
+		"flarum/lock": ">1.1"
 	},
 	"autoload": {
 		"psr-4": {"InfamousQ\\FlarumPhorumMigrationTool\\": "src/"}
