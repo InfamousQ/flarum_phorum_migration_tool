@@ -1,0 +1,9 @@
+infamousq-phorum-migration-tool:
+  admin:
+    db-host: "Phorum database's hostname"
+    db-name: "Phorum database's name"
+    db-username: "Phorum database's username"
+    db-username-help: "Tip: Create new user with only read access to the Phorum database"
+    db-password: "Phorum database's user's password"
+    db-prefix: "Prefix of Phorum tables in database"
+    db-prefix-help: "What is the table prefix set for Phorum installation? Not required, default is no prefix"
