@@ -8,10 +8,10 @@ use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
 use Flarum\Console\AbstractCommand;
 use Flarum\Discussion\Discussion;
 use Flarum\Group\Group;
+use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Model\HistoricCommentPost;
-use Symfony\Component\Console\Input\InputArgument;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Psr\Log\NullLogger;
@@ -20,17 +20,18 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 
 	use LoggerAwareTrait;
 
+	/** @var SettingsRepositoryInterface */
+	protected $settings;
+
+	public function __construct(SettingsRepositoryInterface $settings) {
+		$this->settings = $settings;
+		parent::__construct();
+	}
+
 	protected function configure() {
 		$this
 			->setName('phorum:migrate')
-			->setDescription('Migrate data from existing Phorum installation')
-			// Phorum connection arguments
-			->addArgument('host', InputArgument::REQUIRED, 'In which server is Phorum\'s database located? Commonly localhost')
-			->addArgument('db', InputArgument::REQUIRED, 'What is the name of database where Phorum data is saved?')
-			->addArgument('username', InputArgument::REQUIRED, 'Which username can be used to access Phorum database?')
-			->addArgument('password', InputArgument::REQUIRED, 'Which password can be used to access Phorum database?')
-			->addArgument('prefix', InputArgument::OPTIONAL, 'What is the table prefix set for Phorum installation? Not required, default is no prefix.')
-			;
+			->setDescription('Migrate data from existing Phorum installation');
 	}
 
 	protected function fire() {
@@ -39,11 +40,12 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$this->setLogger(new ConsoleLogger());
 		}
 
-		$phorum_db_host = $this->input->getArgument('host');
-		$phorum_db_username = $this->input->getArgument('username');
-		$phorum_db_password = $this->input->getArgument('password');
-		$phorum_db_name = $this->input->getArgument('db');
-		$phorum_db_prefix = $this->input->getArgument('prefix');
+
+		$phorum_db_host = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_host');
+		$phorum_db_name = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_name');
+		$phorum_db_username = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_username');
+		$phorum_db_password = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_password');
+		$phorum_db_prefix = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_prefix', '');
 
 		$connector = new Connector(
 			$phorum_db_host,

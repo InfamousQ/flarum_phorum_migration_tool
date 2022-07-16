@@ -3,11 +3,10 @@
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
 use Flarum\Console\AbstractCommand;
+use Flarum\Settings\SettingsRepositoryInterface;
 use InfamousQ\FlarumPhorumMigrationTool\Phorum\Connector;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
-use InfamousQ\FlarumPhorumMigrationTool\Models\PhorumUserGroup;
-use Symfony\Component\Console\Input\InputArgument;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Psr\Log\NullLogger;
@@ -16,17 +15,18 @@ class PhorumViewCommand extends AbstractCommand implements LoggerAwareInterface 
 
 	use LoggerAwareTrait;
 
+	/** @var SettingsRepositoryInterface */
+	protected $settings;
+
+	public function __construct(SettingsRepositoryInterface $settings) {
+		$this->settings = $settings;
+		parent::__construct();
+	}
+
 	protected function configure() {
 		$this
 			->setName('phorum:view')
-			->setDescription('View existing phorum installation, used for debugging if connection is working')
-			// Phorum connection arguments
-			->addArgument('host', InputArgument::REQUIRED, 'In which server is Phorum\'s database located? Commonly localhost')
-			->addArgument('db', InputArgument::REQUIRED, 'What is the name of database where Phorum data is saved?')
-			->addArgument('username', InputArgument::REQUIRED, 'Which username can be used to access Phorum database?')
-			->addArgument('password', InputArgument::REQUIRED, 'Which password can be used to access Phorum database?')
-			->addArgument('prefix', InputArgument::OPTIONAL, 'What is the table prefix set for Phorum installation? Not required, default is no prefix.')
-			;
+			->setDescription('View existing phorum installation, used for debugging if connection is working');
 	}
 
 	protected function fire() {
@@ -36,11 +36,11 @@ class PhorumViewCommand extends AbstractCommand implements LoggerAwareInterface 
 			$this->setLogger(new ConsoleLogger());
 		}
 
-		$phorum_db_host = $this->input->getArgument('host');
-		$phorum_db_username = $this->input->getArgument('username');
-		$phorum_db_password = $this->input->getArgument('password');
-		$phorum_db_name = $this->input->getArgument('db');
-		$phorum_db_prefix = $this->input->getArgument('prefix');
+		$phorum_db_host = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_host');
+		$phorum_db_name = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_name');
+		$phorum_db_username = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_username');
+		$phorum_db_password = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_password');
+		$phorum_db_prefix = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_prefix', '');
 
 		$this->logger->debug("host: {$phorum_db_host}\nuser: {$phorum_db_username}\npass: {$phorum_db_password}\nDB: {$phorum_db_name}\nPrefix: {$phorum_db_prefix}");
 
@@ -49,7 +49,8 @@ class PhorumViewCommand extends AbstractCommand implements LoggerAwareInterface 
 			$phorum_db_name,
 			$phorum_db_username,
 			$phorum_db_password,
-			$phorum_db_prefix);
+			$phorum_db_prefix
+		);
 
 		// Find all user groups
 		$this->output->writeln("-----");

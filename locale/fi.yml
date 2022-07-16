@@ -1,0 +1,9 @@
+infamousq-phorum-migration-tool:
+  admin:
+    db-host: "Phorum tietokannan palvelimen osoite"
+    db-name: "Phorum tietokannan nimi"
+    db-username: "Phorum tietokannan käyttäjätunnus"
+    db-username-help: "Neuvo: Käytä käyttäjätunnusta jolla on pelkät lukuoikeudet tietokantaan"
+    db-password: "Phorum tietokannan käyttäjätunnuksen salasana"
+    db-prefix: "Phorum taulujen etuliite"
+    db-prefix-help: "Phorum tietokannan tauluissa voi olla etuliite (prefix). Mikäli se on asetettu, lisää se tähän. Ei pakollinen, oletusarvo on tyhjä tekstijono"
