@@ -182,10 +182,12 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$p_forum_id = (int) $p_forum['forum_id'] ?? 0;
 			$p_forum_name = $p_forum['name'] ?? '';
 			$p_forum_description = $p_forum['description'] ?? '';
+			$p_forum_position = $p_forum['display_order'] ?? null;
 			$tag_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, $p_forum_id);
 			$existing = false;
 			if (null === $tag_id) {
 				$tag = Tag::build($p_forum_name, $p_forum_name, $p_forum_description, '#888', null, true);
+				$tag->position = $p_forum_position;
 				$tag->save();
 				$tag->refresh();
 			} else {
@@ -208,7 +210,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	 */
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
-		$p_thread_starting_messages = $connector->getThreadStartingMessages(75);
+		$p_thread_starting_messages = $connector->getThreadStartingMessages(200);
 		$discussions = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
 			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;

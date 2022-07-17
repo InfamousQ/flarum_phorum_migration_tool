@@ -63,7 +63,7 @@ class Connector {
 
 	public function getForums() {
 		try {
-			$p_forum_query = "SELECT forum_id, name, description, parent_id FROM {$this->table_prefix}forums ORDER BY forum_id";
+			$p_forum_query = "SELECT forum_id, name, description, parent_id, display_order FROM {$this->table_prefix}forums WHERE active = 1 ORDER BY forum_id";
 			return $this->pdo->query($p_forum_query);
 		} catch (\PDOException $pdo_exception) {
 			throw new ConnectorException('Could not query forums from Phorum', 1, $pdo_exception);
