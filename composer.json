@@ -5,7 +5,8 @@
 	"require": {
 		"flarum/core": ">1.1",
 		"flarum/sticky": "*",
-		"flarum/lock": "*"
+		"flarum/lock": "*",
+		"flarum/tags": "*"
 	},
 	"autoload": {
 		"psr-4": {"InfamousQ\\FlarumPhorumMigrationTool\\": "src/"}
