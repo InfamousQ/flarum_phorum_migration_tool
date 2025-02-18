@@ -15,9 +15,18 @@ Following are migrated:
 
 In Flarum installation directory, run shell command:
 
-`composer require infamousq/flarum-migration-tool`
+```
+composer require infamousq/flarum-migration-tool
+```
 
-After extension is downloaded, go to Flarum admin UI. Activate the extension.
+After extension is downloaded, activate required extensions `Sticky`, `Lock` and `Tags` and this extension `Phorum migration tool`. This can be done via Flarum admin UI or by following commands:
+
+```
+php flarum extension:enable flarum-lock
+php flarum extension:enable flarum-sticky
+php flarum extension:enable flarum-tags
+php flarum extension:enable infamousq-phorum-migration-tool
+```
 
 Go to extension admin UI page. Fill in Phorum database information.
 
