@@ -40,7 +40,6 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$this->setLogger(new ConsoleLogger());
 		}
 
-
 		$phorum_db_host = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_host');
 		$phorum_db_name = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_name');
 		$phorum_db_username = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_username');
@@ -58,10 +57,12 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 		$p_user_groups = $this->importUserGroups($connector);
 		$p_users = $this->importUsers($connector);
 		$this->importUserGroupMapping($connector, $p_user_groups, $p_users);
+		unset($p_user_groups);
 		$p_forums = $this->importPhorumForumsAsTags($connector);
 		$p_discussions = $this->importPhorumMessagesAsDiscussions($connector, $p_users, $p_forums);
-		foreach ($p_discussions as $p_thread_id => $discussion) {
-			$this->importPhorumMessageForThread($connector, $p_thread_id, $discussion, $p_users);
+		unset($p_forums);
+		foreach ($p_discussions as $p_thread_id => $discussion_id) {
+			$this->importPhorumMessageForThread($connector, $p_thread_id, $discussion_id, $p_users);
 		}
 	}
 
@@ -210,7 +211,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	 */
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
-		$p_thread_starting_messages = $connector->getThreadStartingMessages(200);
+		$p_thread_starting_messages = $connector->getThreadStartingMessages();
 		$discussions = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
 			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;
@@ -269,7 +270,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			}
 
 			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $p_thread_id, $discussion->id, $existing);
-			$discussions[$p_thread_id] = $discussion;
+			$discussions[$p_thread_id] = $discussion->id;
 		}
 
 		return $discussions;
@@ -278,16 +279,17 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	/**
 	 * @param Connector $connector
 	 * @param int $phorum_thread_id
-	 * @param Discussion $discussion
+	 * @param int $discussion_id
 	 * @param User[] $users
 	 * @param Tag[] $forums
 	 */
-	protected function importPhorumMessageForThread(Connector $connector, int $phorum_thread_id, Discussion $discussion, array $users) {
+	protected function importPhorumMessageForThread(Connector $connector, int $phorum_thread_id, $discussion_id, array $users) {
 		// Find all messages that follow particular thread_id
 		$p_thread_messages = $connector->getThreadMessages($phorum_thread_id);
 		$this->output->writeln("Reading messages for Phorum thread {$phorum_thread_id}");
 		/** @var Post[] $posts */
 		$posts = [];
+		$discussion = $discussion = Discussion::find($discussion_id);
 		foreach ($p_thread_messages as $p_msg) {
 			$p_message_id = $p_msg['message_id'] ?? null;
 			$p_user_id = $p_msg['user_id'] ?? null;
