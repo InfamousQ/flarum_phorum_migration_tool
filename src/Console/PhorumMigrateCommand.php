@@ -75,10 +75,9 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$existing = false;
 			$phorum_user_group_id = $p_group_row['group_id'];
 			$user_group_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_USER_GROUP, $phorum_user_group_id);
+			$user_group = Group::find($user_group_id);
 			if (null === $user_group_id) {
 				$user_group = Group::build($p_group_row['name'], $p_group_row['name']);
-			} else {
-				$user_group = Group::find($user_group_id);
 			}
 			$user_group->name_singular = $p_group_row['name'];
 			$user_group->name_plural = $p_group_row['name'];
