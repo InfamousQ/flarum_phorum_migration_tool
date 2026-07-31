@@ -51,8 +51,20 @@ class FakeConnector extends Connector
         return $this->threadStartingMessages;
     }
 
-    public function getThreadMessages(int $thread_id)
+    /**
+     * Flattens the by-thread fixture rows into the shape the real
+     * Connector::getAllThreadMessages() returns: every message across every
+     * thread, each row carrying its own `thread` id.
+     */
+    public function getAllThreadMessages()
     {
-        return $this->threadMessages[$thread_id] ?? [];
+        $rows = [];
+        foreach ($this->threadMessages as $thread_id => $messages) {
+            foreach ($messages as $message) {
+                $rows[] = $message + ['thread' => $thread_id];
+            }
+        }
+
+        return $rows;
     }
 }

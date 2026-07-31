@@ -4,6 +4,7 @@ namespace InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support;
 
 use Flarum\Settings\SettingsRepositoryInterface;
 use InfamousQ\FlarumPhorumMigrationTool\Console\PhorumMigrateCommand;
+use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Phorum\Connector;
 use Psr\Log\NullLogger;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -59,9 +60,30 @@ class TestablePhorumMigrateCommand extends PhorumMigrateCommand
         return $this->importPhorumMessagesAsDiscussions($connector, $users, $tags);
     }
 
+    /**
+     * Mirrors PhorumMigrateCommand::importPhorumMessageForThread(), but preloads/persists
+     * the Phorum-id-to-Flarum-id mapping for just this one thread's messages, so existing
+     * per-thread tests (which exercise one thread at a time against a FakeConnector) don't
+     * need to know about the shared preload/bulk-insert bookkeeping importPhorumMessages()
+     * does across threads in a real run.
+     */
     public function runImportPhorumMessageForThread(Connector $connector, int $phorumThreadId, $discussionId, array $users): array
     {
-        return $this->importPhorumMessageForThread($connector, $phorumThreadId, $discussionId, $users);
+        $messages = $connector->getAllThreadMessages();
+        $threadMessages = array_values(array_filter($messages, fn ($message) => $message['thread'] == $phorumThreadId));
+
+        $messageIdToPostId = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
+            ->pluck('flarum_id', 'phorum_id')
+            ->all();
+        $newMappings = [];
+
+        $posts = $this->importPhorumMessageForThread($phorumThreadId, $discussionId, $users, $threadMessages, $messageIdToPostId, $newMappings);
+
+        if (!empty($newMappings)) {
+            PhorumMapping::insert($newMappings);
+        }
+
+        return $posts;
     }
 
     /**
@@ -76,8 +98,6 @@ class TestablePhorumMigrateCommand extends PhorumMigrateCommand
         $this->runImportUserGroupMapping($connector, $userGroups, $users);
         $tags = $this->runImportPhorumForumsAsTags($connector);
         $discussions = $this->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
-        foreach ($discussions as $phorumThreadId => $discussionId) {
-            $this->runImportPhorumMessageForThread($connector, $phorumThreadId, $discussionId, $users);
-        }
+        $this->importPhorumMessages($connector, $discussions, $users);
     }
 }
