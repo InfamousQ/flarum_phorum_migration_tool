@@ -12,6 +12,8 @@ use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Model\HistoricCommentPost;
+use Carbon\Carbon;
+use Illuminate\Support\Str;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Psr\Log\NullLogger;
@@ -61,9 +63,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 		$p_forums = $this->importPhorumForumsAsTags($connector);
 		$p_discussions = $this->importPhorumMessagesAsDiscussions($connector, $p_users, $p_forums);
 		unset($p_forums);
-		foreach ($p_discussions as $p_thread_id => $discussion_id) {
-			$this->importPhorumMessageForThread($connector, $p_thread_id, $discussion_id, $p_users);
-		}
+		$this->importPhorumMessages($connector, $p_discussions, $p_users);
 	}
 
 	protected function importUserGroups(Connector $connector) : array { 
@@ -201,17 +201,29 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 	}
 
 	/**
-	 * Find thread starting messages from Phorum and create Discussion for each
+	 * Find thread starting messages from Phorum and create a Discussion for each.
+	 *
+	 * The Phorum-id-to-Flarum-id mapping is preloaded once instead of queried per
+	 * thread, and new discussions/their tag pivot rows/their mapping rows are
+	 * collected while looping and bulk-inserted afterwards, instead of each thread
+	 * doing its own insert+refresh+pivot-save+mapping-write round trips.
 	 *
 	 * @param Connector $connector
 	 * @param User[] $users . Key is Phorum user id
 	 * @param Tag[] $tags . Key is Phorum forum id
-	 * @return Discussion[]
+	 * @return int[] Discussion id keyed by Phorum thread id
 	 */
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
 		$p_thread_starting_messages = $connector->getThreadStartingMessages();
+		$discussion_mapping = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
+			->pluck('flarum_id', 'phorum_id')
+			->all();
+		$default_locale = $this->settings->get('default_locale', 'en');
+
 		$discussions = [];
+		/** @var array $pending_discussions List of ['thread_id' => , 'tag_id' => , 'row' => []] awaiting bulk insert */
+		$pending_discussions = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
 			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;
 			$p_thread_id = $p_msg['thread'] ?? null;
@@ -228,7 +240,6 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$p_message_is_sticky = $p_msg['sort'] == 1;
 			// Phorum thread is locked if it's starting message is marked to have 'closed' attribute
 			$p_message_is_locked = $p_msg['closed'] == 1;
-			$discussion_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $p_thread_id);
 			$author_user = $users[$p_user_id] ?? null;
 			if (null === $author_user) {
 				// TODO: Create tmp user
@@ -241,54 +252,131 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				continue;
 			}
 
-			$existing = false;
-			if (null === $discussion_id) {
-				// Not found, create
-				$discussion = new Discussion();
-				$discussion->rename($p_subject);
-				$discussion->setAttribute('is_sticky', $p_message_is_sticky);
-				$discussion->setAttribute('is_locked', $p_message_is_locked);
-				$discussion->setRelation('user', $author_user);
-				// Note: discussion creation timestamp is edited when posts are added
-				$discussion->save();
-				$discussion->refresh();
-
-				// If Phorum message is not approved, set the discussion as hidden
-				if ($p_status_int < 2) {
-					$discussion->hide();
-				}
-
-				$this->output->writeln("Discussion - created new discussion");
-
-				$tag->discussions()->save($discussion);
-			} else {
+			$discussion_id = $discussion_mapping[$p_thread_id] ?? null;
+			if (null !== $discussion_id) {
 				// Found, no need to touch anything
-				$existing = true;
-				$discussion = Discussion::find($discussion_id);
 				$this->output->writeln("Discussion - found old discussion");
+				$discussions[$p_thread_id] = $discussion_id;
+				continue;
 			}
 
-			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $p_thread_id, $discussion->id, $existing);
-			$discussions[$p_thread_id] = $discussion->id;
+			// Not found, queue for creation. Mirrors what Discussion::rename() /
+			// ->hide() would set, since bulk-inserted rows skip those mutators.
+			// Note: discussion creation timestamp is left unset here, same as
+			// before - it is set for real when the thread's first post is imported.
+			$row = [
+				'title' => $p_subject,
+				'slug' => Str::slug($p_subject, '-', $default_locale),
+				'is_sticky' => $p_message_is_sticky,
+				'is_locked' => $p_message_is_locked,
+				'user_id' => $author_user->id,
+				// If Phorum message is not approved, set the discussion as hidden.
+				// Every row must carry the same columns for the bulk insert below.
+				'hidden_at' => $p_status_int < 2 ? Carbon::now() : null,
+			];
+
+			$pending_discussions[] = [
+				'thread_id' => $p_thread_id,
+				'tag_id' => $tag->id,
+				'row' => $row,
+			];
+		}
+
+		foreach (array_chunk($pending_discussions, 500) as $chunk) {
+			$first_id = $this->bulkInsertAndGetFirstId('discussions', array_column($chunk, 'row'));
+
+			$pivot_rows = [];
+			$mapping_rows = [];
+			foreach ($chunk as $i => $pending) {
+				$discussion_id = $first_id + $i;
+				$discussions[$pending['thread_id']] = $discussion_id;
+				$pivot_rows[] = ['discussion_id' => $discussion_id, 'tag_id' => $pending['tag_id']];
+				$mapping_rows[] = [
+					'phorum_data_type' => PhorumMapping::DATA_TYPE_DISCUSSION,
+					'phorum_id' => (int) $pending['thread_id'],
+					'flarum_id' => $discussion_id,
+					'existing' => false,
+				];
+				$this->output->writeln("Discussion - created new discussion");
+			}
+
+			PhorumMapping::query()->getConnection()->table('discussion_tag')->insert($pivot_rows);
+			PhorumMapping::insert($mapping_rows);
 		}
 
 		return $discussions;
 	}
 
 	/**
+	 * Bulk-insert rows sharing the same columns in a single statement and return the
+	 * auto-increment id of the first inserted row. For a single multi-row INSERT,
+	 * MySQL/MariaDB assign consecutive auto-increment ids in the listed row order, so
+	 * callers can derive every other row's id as $firstId + its offset in $rows.
+	 * Relies on nothing else writing to the table concurrently, which holds true for
+	 * this single-threaded, one-off migration command.
+	 *
+	 * @param string $table Table name without the connection's configured prefix
+	 * @param array $rows
+	 * @return int
+	 */
+	protected function bulkInsertAndGetFirstId(string $table, array $rows) : int {
+		$connection = PhorumMapping::query()->getConnection();
+		$connection->table($table)->insert($rows);
+
+		return (int) $connection->getPdo()->lastInsertId();
+	}
+
+	/**
+	 * Import every reply for every thread. Messages are fetched from Phorum
+	 * in a single bulk query and grouped by thread in memory, and the
+	 * Phorum-id-to-Flarum-id mapping table is preloaded/batch-inserted once,
+	 * instead of once per message, to avoid tens of thousands of per-post
+	 * round trips.
+	 *
 	 * @param Connector $connector
+	 * @param array $p_discussions Discussion id keyed by Phorum thread id
+	 * @param User[] $users
+	 */
+	protected function importPhorumMessages(Connector $connector, array $p_discussions, array $users) {
+		$p_messages_by_thread = [];
+		foreach ($connector->getAllThreadMessages() as $p_msg) {
+			$p_messages_by_thread[$p_msg['thread']][] = $p_msg;
+		}
+
+		$message_id_to_post_id = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
+			->pluck('flarum_id', 'phorum_id')
+			->all();
+
+		$new_mappings = [];
+		foreach ($p_discussions as $p_thread_id => $discussion_id) {
+			$this->importPhorumMessageForThread(
+				$p_thread_id,
+				$discussion_id,
+				$users,
+				$p_messages_by_thread[$p_thread_id] ?? [],
+				$message_id_to_post_id,
+				$new_mappings
+			);
+		}
+
+		foreach (array_chunk($new_mappings, 500) as $chunk) {
+			PhorumMapping::insert($chunk);
+		}
+	}
+
+	/**
 	 * @param int $phorum_thread_id
 	 * @param int $discussion_id
 	 * @param User[] $users
-	 * @param Tag[] $forums
+	 * @param array $p_thread_messages Messages belonging to this thread, in order
+	 * @param array $message_id_to_post_id Phorum message id => Flarum post id, shared across threads
+	 * @param array $new_mappings Rows to bulk-insert into phorum_mapping, shared across threads
 	 */
-	protected function importPhorumMessageForThread(Connector $connector, int $phorum_thread_id, $discussion_id, array $users) {
-		// Find all messages that follow particular thread_id
-		$p_thread_messages = $connector->getThreadMessages($phorum_thread_id);
+	protected function importPhorumMessageForThread(int $phorum_thread_id, $discussion_id, array $users, array $p_thread_messages, array &$message_id_to_post_id, array &$new_mappings) {
 		$this->output->writeln("Reading messages for Phorum thread {$phorum_thread_id}");
 		/** @var Post[] $posts */
 		$posts = [];
-		$discussion = $discussion = Discussion::find($discussion_id);
+		$discussion = Discussion::find($discussion_id);
 		foreach ($p_thread_messages as $p_msg) {
 			$p_message_id = $p_msg['message_id'] ?? null;
 			$p_user_id = $p_msg['user_id'] ?? null;
@@ -303,11 +391,18 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				continue;
 			}
 
-			$post_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $p_message_id);
+			$post_id = $message_id_to_post_id[$p_message_id] ?? null;
 			/** @var \Flarum\Post\CommentPost $post */
 			if (null === $post_id) {
 				$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created);
 				$post->save();
+				$message_id_to_post_id[$p_message_id] = $post->id;
+				$new_mappings[] = [
+					'phorum_data_type' => PhorumMapping::DATA_TYPE_MESSAGE,
+					'phorum_id' => (int) $p_message_id,
+					'flarum_id' => (int) $post->id,
+					'existing' => false,
+				];
 			} else {
 				$post = $discussion->posts->find($post_id);
 				if (null === $post) {
@@ -317,7 +412,6 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				}
 			}
 
-			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $p_message_id, $post->id);
 			if ($p_is_closed) {
 				$post
 					->hide()
@@ -331,13 +425,12 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 			$discussion->setFirstPost($first_post);
 			$last_post = end($posts);
 			$discussion->setLastPost($last_post);
+			$discussion->comment_count = count($posts);
+			$discussion->participant_count = count(array_unique(array_map(function ($post) {
+				return $post->user_id;
+			}, $posts)));
 			$discussion->save();
 		}
-		$discussion
-			->refreshCommentCount()
-			->refreshLastPost()
-			->refreshParticipantCount()
-			->save();
 
 		return $posts;
 	}

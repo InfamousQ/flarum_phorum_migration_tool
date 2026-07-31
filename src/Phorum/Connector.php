@@ -83,17 +83,18 @@ class Connector {
 	}
 
 	/**
-	 * Undocumented function
+	 * Fetch every reply/thread message across all threads in a single query,
+	 * ordered so that callers can bucket rows by `thread` and rely on
+	 * message order within each bucket for first/last post detection.
 	 *
-	 * @param integer $thread_id
 	 * @return \PDOStatement
 	 */
-	public function getThreadMessages(int $thread_id) {
+	public function getAllThreadMessages() {
 		try {
-			$p_thread_messages_query = "SELECT message_id, user_id, body, closed, datestamp FROM {$this->table_prefix}messages WHERE thread = {$thread_id}";
+			$p_thread_messages_query = "SELECT thread, message_id, user_id, body, closed, datestamp FROM {$this->table_prefix}messages ORDER BY thread, datestamp, message_id";
 			return $this->pdo->query($p_thread_messages_query);
 		} catch (\PDOException $pdo_exception) {
-			throw new ConnectorException('Could not query thread starting messages from Phorum', 1, $pdo_exception);
+			throw new ConnectorException('Could not query thread messages from Phorum', 1, $pdo_exception);
 		}
 	}
 }
