@@ -2,15 +2,17 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Tests\integration;
 
-use Flarum\Testing\integration\TestCase as FlarumTestCase;
+use Flarum\Testing\integration\ConsoleTestCase as FlarumConsoleTestCase;
 
-class TestCase extends FlarumTestCase
+class TestCase extends FlarumConsoleTestCase
 {
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->extension('infamousq-phorum-migration-tool');
+        // Dependencies must be enabled before the extension that depends on them,
+        // since ExtensionManager::enable() checks getExtensionDependencyIds().
+        $this->extension('flarum-tags', 'flarum-sticky', 'flarum-lock', 'infamousq-phorum-migration-tool');
 
         $this->prepareDatabase([
             'phorum_mapping' => [],

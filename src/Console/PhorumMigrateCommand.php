@@ -150,7 +150,7 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				 1 = approved
 				 2 = moderator
 			*/
-			if ($status < 1 && $status > 2) {
+			if ($status < 1 || $status > 2) {
 				// Status is not of our concern, skip connecting user with user group
 				continue;
 			}
