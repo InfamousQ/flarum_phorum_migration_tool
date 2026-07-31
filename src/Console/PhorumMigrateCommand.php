@@ -105,15 +105,18 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 				// No existing mapped user, see if we have user with same email already
 				$user = User::where(['email' => $p_user_row['email']])->first();
 				if (null === $user) {
-					$user = User::register($p_user_row['display_name'], $p_user_row['email'], 'test');
+					$username = $this->resolveUsername($p_user_row['display_name'], null);
+					$user = User::register($username, $p_user_row['email'], 'test');
 				} else {
 					$existing = true; // This use previously existed already!
-					$user->rename($p_user_row['display_name']);
+					$username = $this->resolveUsername($p_user_row['display_name'], $user->id);
+					$user->rename($username);
 					$user->changeEmail($p_user_row['email']);
 				}
 			} else {
 				$user = User::find($user_id);
-				$user->rename($p_user_row['display_name']);
+				$username = $this->resolveUsername($p_user_row['display_name'], $user->id);
+				$user->rename($username);
 				$user->changeEmail($p_user_row['email']);
 			}
 
@@ -125,6 +128,43 @@ class PhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterfa
 		}
 
 		return $users_created;
+	}
+
+	/**
+	 * Resolve the Flarum username to use for a Phorum user, avoiding
+	 * `users_username_unique` violations against an *unrelated* Flarum user
+	 * (i.e. one matched by neither Phorum id mapping nor email, so a plain
+	 * insert/rename would otherwise collide).
+	 *
+	 * If the desired username is already taken by a different user, "_migrated"
+	 * is appended. If that is taken too, migration cannot proceed for this user.
+	 *
+	 * @param string $desired_username
+	 * @param int|null $excluding_user_id Id of the Flarum user this Phorum user
+	 *   is being merged into/updating, if any - its own current username must
+	 *   not count as a collision against itself.
+	 * @return string
+	 */
+	protected function resolveUsername(string $desired_username, ?int $excluding_user_id) : string {
+		if (!$this->usernameTakenByAnotherUser($desired_username, $excluding_user_id)) {
+			return $desired_username;
+		}
+
+		$migrated_username = $desired_username . '_migrated';
+		if (!$this->usernameTakenByAnotherUser($migrated_username, $excluding_user_id)) {
+			return $migrated_username;
+		}
+
+		throw new \RuntimeException("Cannot migrate Phorum user '{$desired_username}': both '{$desired_username}' and '{$migrated_username}' are already taken by different Flarum users.");
+	}
+
+	protected function usernameTakenByAnotherUser(string $username, ?int $excluding_user_id) : bool {
+		$query = User::where('username', $username);
+		if (null !== $excluding_user_id) {
+			$query->where('id', '!=', $excluding_user_id);
+		}
+
+		return $query->exists();
 	}
 
 	/**

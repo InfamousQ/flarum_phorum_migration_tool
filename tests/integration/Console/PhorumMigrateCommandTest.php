@@ -126,6 +126,84 @@ class PhorumMigrateCommandTest extends TestCase
         $this->assertSame('alice2@example.com', $updated->email);
     }
 
+    /**
+     * @test
+     */
+    public function it_appends_migrated_suffix_when_a_new_user_would_collide_with_an_unrelated_username()
+    {
+        $existingUser = User::register('docker', 'docker@localhost', 'password');
+        $existingUser->save();
+
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'docker', 'real_name' => '', 'email' => 'docker@phorum.example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $users = $this->command()->runImportUsers($connector);
+
+        $this->assertSame('docker_migrated', $users[1]->username);
+        $this->assertSame('docker@phorum.example.com', $users[1]->email);
+        $this->assertNotSame($existingUser->id, $users[1]->id);
+    }
+
+    /**
+     * @test
+     */
+    public function it_appends_migrated_suffix_when_an_email_matched_user_would_rename_into_an_unrelated_username()
+    {
+        $sharedEmailUser = User::register('PreExisting', 'shared@example.com', 'password');
+        $sharedEmailUser->save();
+        $usernameOwner = User::register('Alice', 'alice@example.com', 'password');
+        $usernameOwner->save();
+
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'shared@example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $users = $this->command()->runImportUsers($connector);
+
+        $this->assertSame($sharedEmailUser->id, $users[1]->id);
+        $this->assertSame('Alice_migrated', $users[1]->username);
+        $this->assertSame('Alice', User::find($usernameOwner->id)->username);
+    }
+
+    /**
+     * @test
+     */
+    public function it_does_not_append_a_suffix_for_a_clean_email_match()
+    {
+        $existingUser = User::register('PreExisting', 'shared@example.com', 'password');
+        $existingUser->save();
+
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'shared@example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $users = $this->command()->runImportUsers($connector);
+
+        $this->assertSame('Alice', $users[1]->username);
+    }
+
+    /**
+     * @test
+     */
+    public function it_throws_when_both_the_desired_and_migrated_usernames_are_already_taken()
+    {
+        User::register('docker', 'docker@localhost', 'password')->save();
+        User::register('docker_migrated', 'docker_migrated@localhost', 'password')->save();
+
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'docker', 'real_name' => '', 'email' => 'docker@phorum.example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->command()->runImportUsers($connector);
+    }
+
     // --- importUserGroupMapping ---------------------------------------------
 
     /**
