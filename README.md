@@ -51,3 +51,30 @@ Migration takes a while.
 Warning: Any migrated content is deleted when undoing migration! This includes user groups and users!
 
 TODO!
+
+# Testing
+
+This extension uses [flarum/testing](https://github.com/flarum/testing) with PHPUnit for unit and integration tests, under `tests/`.
+
+No local PHP/Composer install is required — a `docker-compose.yml` and `docker/php.Dockerfile` are provided:
+
+```
+# install dependencies
+docker compose run --rm composer install
+
+# unit tests (no database needed)
+docker compose run --rm php composer test:unit
+
+# integration tests (spins up a MariaDB service)
+docker compose run --rm php composer test:setup
+docker compose run --rm php composer test:integration
+
+# or both suites at once
+docker compose run --rm php composer test
+```
+
+If you have PHP and Composer installed locally instead, the same `composer test`, `composer test:unit`, `composer test:integration` and `composer test:setup` scripts work directly. (If your Docker install doesn't have the `docker compose` plugin, use the standalone `docker-compose` binary instead — same commands.)
+
+## Continuous integration
+
+CI (`.github/workflows/backend.yml`) uses Flarum's official reusable workflow ([docs](https://docs.flarum.org/extend/github-actions/)), which runs the same `composer install` / `composer test:setup` / `composer test` scripts across a PHP/database matrix. `php_versions` is pinned to `["8.2", "8.3"]` there because `composer.lock` currently requires PHP 8.2+ (via `laminas/laminas-diactoros` ^3.x and `laminas/laminas-httphandlerrunner` ^2.x).

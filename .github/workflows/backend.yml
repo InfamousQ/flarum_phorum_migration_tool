@@ -1,0 +1,14 @@
+name: Backend
+on: [workflow_dispatch, push, pull_request]
+
+jobs:
+  run:
+    uses: flarum/framework/.github/workflows/REUSABLE_backend.yml@main
+    with:
+      enable_backend_testing: true
+      enable_phpstan: false
+      backend_directory: .
+      # Pinned to 8.2/8.3: composer.lock currently requires laminas/laminas-diactoros ^3.x
+      # and laminas/laminas-httphandlerrunner ^2.x, both of which need PHP 8.2+.
+      php_versions: '["8.2", "8.3"]'
+      db_versions: '["mysql:8.0.30", "mariadb"]'
