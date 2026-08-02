@@ -47,18 +47,20 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
-    public function it_reuses_the_existing_mapped_group_on_a_second_run()
+    public function it_reuses_the_existing_mapped_group_on_a_second_run_without_overwriting_its_name()
     {
         $connector = new FakeConnector();
         $connector->userGroups = [['group_id' => 1, 'name' => 'Admins']];
 
         $first = $this->command()->runImportUserGroups($connector);
+        // Phorum's own name changing on a later run must not clobber a name that
+        // may have been hand-edited inside Flarum since the first run.
         $connector->userGroups = [['group_id' => 1, 'name' => 'Admins Renamed']];
         $second = $this->command()->runImportUserGroups($connector);
 
         $this->assertSame($first[1]->id, $second[1]->id);
         $this->assertSame(1, Group::query()->where('id', $first[1]->id)->count());
-        $this->assertSame('Admins Renamed', Group::find($first[1]->id)->name_singular);
+        $this->assertSame('Admins', Group::find($first[1]->id)->name_singular);
     }
 
     // --- importUsers --------------------------------------------------------
@@ -106,7 +108,7 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
-    public function it_updates_the_same_flarum_user_on_a_second_run()
+    public function it_reuses_the_same_flarum_user_on_a_second_run_without_overwriting_it()
     {
         $connector = new FakeConnector();
         $connector->users = [
@@ -114,6 +116,8 @@ class PhorumMigrateCommandTest extends TestCase
         ];
         $first = $this->command()->runImportUsers($connector);
 
+        // Phorum's own display name/email changing on a later run must not clobber
+        // a rename/email change made inside Flarum since the first run.
         $connector->users = [
             ['user_id' => 1, 'display_name' => 'Alice Renamed', 'real_name' => 'Alice A', 'email' => 'alice2@example.com', 'active' => 1, 'admin' => 0],
         ];
@@ -122,8 +126,8 @@ class PhorumMigrateCommandTest extends TestCase
         $this->assertSame($first[1]->id, $second[1]->id);
         $this->assertSame(1, User::query()->where('id', $first[1]->id)->count());
         $updated = User::find($first[1]->id);
-        $this->assertSame('Alice Renamed', $updated->username);
-        $this->assertSame('alice2@example.com', $updated->email);
+        $this->assertSame('Alice', $updated->username);
+        $this->assertSame('alice@example.com', $updated->email);
     }
 
     /**
