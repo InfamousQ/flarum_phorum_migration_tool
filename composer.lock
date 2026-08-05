@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "db8912f9e9b7bb2bd0a3f36166e69692",
+    "content-hash": "7feb870e5a259b1a694282a14640363d",
     "packages": [
         {
             "name": "axy/backtrace",
@@ -1352,6 +1352,80 @@
                 }
             ],
             "time": "2024-10-26T22:15:50+00:00"
+        },
+        {
+            "name": "flarum/markdown",
+            "version": "v1.8.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/flarum/markdown.git",
+                "reference": "22ea41d3be90d56c8b853c6798d25d2075e5f66f"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/flarum/markdown/zipball/22ea41d3be90d56c8b853c6798d25d2075e5f66f",
+                "reference": "22ea41d3be90d56c8b853c6798d25d2075e5f66f",
+                "shasum": ""
+            },
+            "require": {
+                "flarum/core": "^1.8"
+            },
+            "type": "flarum-extension",
+            "extra": {
+                "flarum-cli": {
+                    "modules": {
+                        "js": true,
+                        "css": true,
+                        "admin": false,
+                        "forum": true,
+                        "gitConf": true,
+                        "styleci": true,
+                        "jsCommon": false,
+                        "prettier": true,
+                        "typescript": false,
+                        "bundlewatch": false,
+                        "editorConfig": true,
+                        "githubActions": true,
+                        "backendTesting": false
+                    }
+                },
+                "branch-alias": {
+                    "dev-main": "1.x-dev"
+                },
+                "flarum-extension": {
+                    "icon": {
+                        "color": "#fff",
+                        "image": "icon.svg",
+                        "backgroundSize": "100%",
+                        "backgroundColor": "#000",
+                        "backgroundRepeat": "no-repeat",
+                        "backgroundPosition": "center"
+                    },
+                    "title": "Markdown",
+                    "category": "feature"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Allow posts to be formatted with Markdown.",
+            "homepage": "https://flarum.org",
+            "keywords": [
+                "formatting"
+            ],
+            "support": {
+                "forum": "https://discuss.flarum.org",
+                "issues": "https://github.com/flarum/framework/issues",
+                "source": "https://github.com/flarum/markdown"
+            },
+            "funding": [
+                {
+                    "url": "https://flarum.org/donate/",
+                    "type": "website"
+                }
+            ],
+            "time": "2024-10-02T07:10:53+00:00"
         },
         {
             "name": "flarum/sticky",
