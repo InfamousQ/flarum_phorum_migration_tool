@@ -6,7 +6,8 @@
 		"flarum/core": "^1.8",
 		"flarum/sticky": "*",
 		"flarum/lock": "*",
-		"flarum/tags": "*"
+		"flarum/tags": "*",
+		"flarum/markdown": "*"
 	},
 	"require-dev": {
 		"flarum/testing": "^1.0.1",
