@@ -2,6 +2,7 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
+use InfamousQ\FlarumPhorumMigrationTool\Bbcode\PhorumBbcodeCompatibility;
 use InfamousQ\FlarumPhorumMigrationTool\Phorum\Connector;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
@@ -476,7 +477,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		foreach ($p_thread_messages as $p_msg) {
 			$p_message_id = $p_msg['message_id'] ?? null;
 			$p_user_id = $p_msg['user_id'] ?? null;
-			$p_body = $p_msg['body'] ?? '';
+			$p_body = PhorumBbcodeCompatibility::transform($p_msg['body'] ?? '');
 			$p_created = $p_msg['datestamp'] ?? null;
 			$p_is_closed = $p_msg['closed'] == 1;
 
