@@ -5,6 +5,7 @@ namespace InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Console;
 use Flarum\Discussion\Discussion;
 use Flarum\Post\Post;
 use Flarum\Settings\SettingsRepositoryInterface;
+use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\FakeConnector;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\TestablePhorumMigrateDiscussionsCommand;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\TestablePhorumMigratePostsCommand;
@@ -150,5 +151,32 @@ class PhorumMigratePostsCommandTest extends TestCase
         $this->command()->runStep($connector);
 
         $this->assertSame(2, Post::query()->where('type', 'comment')->count());
+    }
+
+    /**
+     * Posts/discussions are bulk-inserted via plain ->save() calls, which
+     * bypasses Flarum's command bus - so the Posted/Started events that
+     * normally keep users.comment_count/discussion_count in sync never fire.
+     * This step must recompute both counters itself.
+     *
+     * @test
+     */
+    public function it_syncs_the_author_comment_and_discussion_counts()
+    {
+        $connector = new FakeConnector();
+        $discussions = $this->fixtureDiscussion($connector);
+
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'closed' => 0],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'closed' => 0],
+        ];
+
+        $this->command()->runStep($connector);
+
+        $discussion = Discussion::find($discussions[100]);
+        $author = User::find($discussion->user_id);
+
+        $this->assertSame(2, $author->comment_count);
+        $this->assertSame(1, $author->discussion_count);
     }
 }

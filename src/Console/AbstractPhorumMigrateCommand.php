@@ -442,6 +442,22 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		foreach (array_chunk($new_mappings, 500) as $chunk) {
 			PhorumMapping::insert($chunk);
 		}
+
+		$this->refreshUserPostCounts($users);
+	}
+
+	/**
+	 * Bulk ->save() inserts of posts/discussions bypass Flarum's command bus,
+	 * so the Posted/Started events that normally keep users.discussion_count
+	 * and users.comment_count in sync never fire. Recompute both counters for
+	 * every migrated user using core's own definition of them.
+	 *
+	 * @param User[] $users
+	 */
+	protected function refreshUserPostCounts(array $users) {
+		foreach ($users as $user) {
+			$user->refreshCommentCount()->refreshDiscussionCount()->save();
+		}
 	}
 
 	/**
