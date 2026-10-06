@@ -9,6 +9,7 @@ use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
 use Flarum\Console\AbstractCommand;
 use Flarum\Discussion\Discussion;
 use Flarum\Group\Group;
+use Flarum\Group\Permission;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
@@ -33,6 +34,11 @@ use Psr\Log\NullLogger;
 abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements LoggerAwareInterface {
 
 	use LoggerAwareTrait;
+
+	/** Phorum's PHORUM_USER_ALLOW_* permission bits (include/api/user.php) */
+	const PHORUM_ALLOW_READ = 1;
+	const PHORUM_ALLOW_REPLY = 2;
+	const PHORUM_ALLOW_NEW_TOPIC = 8;
 
 	/** @var SettingsRepositoryInterface */
 	protected $settings;
@@ -157,7 +163,9 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$user = User::where(['email' => $p_user_row['email']])->first();
 			if (null === $user) {
 				$username = $this->resolveUsername($p_user_row['display_name'], null);
-				$user = User::register($username, $p_user_row['email'], 'test');
+				// Phorum's password hashes aren't carried over, so give the account an
+				// unguessable random password - users regain access via "forgot password".
+				$user = User::register($username, $p_user_row['email'], Str::random(40));
 			} else {
 				$existing = true; // This use previously existed already!
 				$username = $this->resolveUsername($p_user_row['display_name'], $user->id);
@@ -258,27 +266,99 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		}
 	}
 
+	/**
+	 * Phorum forums become tags. A forum guests could not read in Phorum (no
+	 * PHORUM_USER_ALLOW_READ in pub_perms) becomes a restricted tag, readable only by
+	 * the groups that could read it in Phorum - see grantRestrictedTagPermissions().
+	 * Only applied when the tag is first created; an already-mapped tag's
+	 * restriction/permissions are left as-is, as they may have been edited in Flarum.
+	 */
 	protected function importPhorumForumsAsTags(Connector $connector) : array {
 		$p_forums = $connector->getForums();
+		$p_forum_group_perms = $this->loadForumGroupPermissions($connector);
 		$tags = [];
 		foreach ($p_forums as $p_forum) {
 			$p_forum_id = (int) $p_forum['forum_id'] ?? 0;
 			$p_forum_name = $p_forum['name'] ?? '';
 			$p_forum_description = $p_forum['description'] ?? '';
 			$p_forum_position = $p_forum['display_order'] ?? null;
+			// Fail closed: a forum with unknown permissions is treated as non-public.
+			$p_forum_is_public = ((int) ($p_forum['pub_perms'] ?? 0) & self::PHORUM_ALLOW_READ) !== 0;
 			$tag_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, $p_forum_id);
 			$tag = null !== $tag_id ? Tag::find($tag_id) : null;
 			$existing = null !== $tag;
 			if (null === $tag) {
 				$tag = Tag::build($p_forum_name, $p_forum_name, $p_forum_description, '#888', null, true);
 				$tag->position = $p_forum_position;
+				$tag->is_restricted = !$p_forum_is_public;
 				$tag->save();
 				$tag->refresh();
+				if (!$p_forum_is_public) {
+					$this->grantRestrictedTagPermissions(
+						$tag,
+						(int) ($p_forum['reg_perms'] ?? 0),
+						$p_forum_group_perms[$p_forum_id] ?? []
+					);
+				}
 			}
 			PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, $p_forum_id, $tag->id, $existing);
 			$tags[$p_forum_id] = $tag;
 		}
 		return $tags;
+	}
+
+	/**
+	 * Phorum's per-group forum permissions, translated to Flarum group ids via the
+	 * groups step's mapping. Rows for unmapped groups are skipped.
+	 *
+	 * @return array Phorum forum id => [Flarum group id => Phorum permission bitmask]
+	 */
+	protected function loadForumGroupPermissions(Connector $connector) : array {
+		$group_map = $this->loadGroupMap();
+		$perms = [];
+		foreach ($connector->getForumGroupPermissions() as $row) {
+			$group = $group_map[$row['group_id']] ?? null;
+			if (null === $group) {
+				continue;
+			}
+			$perms[(int) $row['forum_id']][$group->id] = (int) $row['permission'];
+		}
+
+		return $perms;
+	}
+
+	/**
+	 * Grant tag-scoped permissions on a restricted tag: to Members per the forum's
+	 * reg_perms, and to each mapped group per its forum_group_xref bitmask.
+	 * Phorum's moderation bits are not translated - grant those by hand in Flarum.
+	 *
+	 * @param Tag $tag
+	 * @param int $reg_perms Phorum bitmask for registered users
+	 * @param array $group_perms Flarum group id => Phorum bitmask
+	 */
+	protected function grantRestrictedTagPermissions(Tag $tag, int $reg_perms, array $group_perms) {
+		$group_perms[Group::MEMBER_ID] = ($group_perms[Group::MEMBER_ID] ?? 0) | $reg_perms;
+
+		$rows = [];
+		foreach ($group_perms as $group_id => $phorum_perms) {
+			if (!($phorum_perms & self::PHORUM_ALLOW_READ)) {
+				continue;
+			}
+			$abilities = ['viewForum'];
+			if ($phorum_perms & self::PHORUM_ALLOW_REPLY) {
+				array_push($abilities, 'discussion.reply', 'discussion.replyWithoutApproval', 'discussion.likePosts');
+			}
+			if ($phorum_perms & self::PHORUM_ALLOW_NEW_TOPIC) {
+				array_push($abilities, 'startDiscussion', 'discussion.startWithoutApproval');
+			}
+			foreach ($abilities as $ability) {
+				$rows[] = ['group_id' => $group_id, 'permission' => "tag{$tag->id}.{$ability}"];
+			}
+		}
+
+		if (!empty($rows)) {
+			Permission::query()->insertOrIgnore($rows);
+		}
 	}
 
 	/**
@@ -479,7 +559,11 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$p_user_id = $p_msg['user_id'] ?? null;
 			$p_body = PhorumBbcodeCompatibility::transform($p_msg['body'] ?? '');
 			$p_created = $p_msg['datestamp'] ?? null;
-			$p_is_closed = $p_msg['closed'] == 1;
+			// Anything not PHORUM_STATUS_APPROVED (2) - i.e. on hold (-1) or hidden by a
+			// moderator (-2) - must not become publicly visible in Flarum. Same rule as
+			// thread starting messages in importPhorumMessagesAsDiscussions().
+			// Note: Phorum's `closed` column means the thread is locked, not hidden.
+			$p_is_hidden = (int) ($p_msg['status'] ?? 2) < 2;
 
 			$author_user = $users[$p_user_id] ?? null;
 			if (null === $author_user) {
@@ -509,7 +593,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				}
 			}
 
-			if ($p_is_closed) {
+			if ($p_is_hidden) {
 				$post
 					->hide()
 					->save();

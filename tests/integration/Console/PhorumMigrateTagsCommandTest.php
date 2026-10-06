@@ -25,7 +25,7 @@ class PhorumMigrateTagsCommandTest extends TestCase
     {
         $connector = new FakeConnector();
         $connector->forums = [
-            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => 'Phorum general discussion', 'parent_id' => 0, 'display_order' => 1],
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => 'Phorum general discussion', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
 
         $tags = $this->command()->runStep($connector);
@@ -42,7 +42,7 @@ class PhorumMigrateTagsCommandTest extends TestCase
     {
         $connector = new FakeConnector();
         $connector->forums = [
-            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1],
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
         $first = $this->command()->runStep($connector);
 
@@ -68,7 +68,7 @@ class PhorumMigrateTagsCommandTest extends TestCase
     {
         $connector = new FakeConnector();
         $connector->forums = [
-            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1],
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
         $first = $this->command()->runStep($connector);
         $deletedId = $first[10]->id;

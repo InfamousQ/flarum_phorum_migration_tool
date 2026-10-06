@@ -55,7 +55,7 @@ class PhorumMigratePostsCommandTest extends TestCase
             ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
         ];
         $connector->forums = [
-            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1],
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
         $connector->threadStartingMessages = [
             ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
@@ -76,8 +76,8 @@ class PhorumMigratePostsCommandTest extends TestCase
         $discussions = $this->fixtureDiscussion($connector);
 
         $connector->threadMessages[100] = [
-            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'closed' => 0],
-            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'closed' => 0],
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'status' => 2],
         ];
 
         // Step under test loads its prerequisites (users/discussions) from
@@ -98,19 +98,23 @@ class PhorumMigratePostsCommandTest extends TestCase
     /**
      * @test
      */
-    public function it_hides_posts_whose_phorum_message_was_marked_closed()
+    public function it_hides_posts_whose_phorum_message_was_not_approved()
     {
         $connector = new FakeConnector();
         $this->fixtureDiscussion($connector);
 
         $connector->threadMessages[100] = [
-            ['message_id' => 1000, 'user_id' => 1, 'body' => 'Closed post', 'datestamp' => 1600000000, 'closed' => 1],
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'Approved post', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'On hold post', 'datestamp' => 1600000001, 'status' => -1],
+            ['message_id' => 1002, 'user_id' => 1, 'body' => 'Moderator hidden post', 'datestamp' => 1600000002, 'status' => -2],
         ];
 
         $this->command()->runStep($connector);
 
-        $post = Post::query()->where('type', 'comment')->first();
-        $this->assertNotNull($post->hidden_at);
+        $posts = Post::query()->where('type', 'comment')->orderBy('created_at')->get();
+        $this->assertNull($posts[0]->hidden_at);
+        $this->assertNotNull($posts[1]->hidden_at);
+        $this->assertNotNull($posts[2]->hidden_at);
     }
 
     /**
@@ -122,7 +126,7 @@ class PhorumMigratePostsCommandTest extends TestCase
         $this->fixtureDiscussion($connector);
 
         $connector->threadMessages[100] = [
-            ['message_id' => 1000, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600000000, 'closed' => 0],
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600000000, 'status' => 2],
         ];
 
         $this->command()->runStep($connector);
@@ -140,14 +144,14 @@ class PhorumMigratePostsCommandTest extends TestCase
         $this->fixtureDiscussion($connector);
 
         $connector->threadMessages[100] = [
-            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'closed' => 0],
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
         ];
         $this->command()->runStep($connector);
 
         // A new reply shows up in Phorum after the first `phorum:migrate:posts`
         // run - a fresh command instance re-running the step should only add
         // the new post, leaving the already-migrated one untouched.
-        $connector->threadMessages[100][] = ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'closed' => 0];
+        $connector->threadMessages[100][] = ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'status' => 2];
         $this->command()->runStep($connector);
 
         $this->assertSame(2, Post::query()->where('type', 'comment')->count());
@@ -167,8 +171,8 @@ class PhorumMigratePostsCommandTest extends TestCase
         $discussions = $this->fixtureDiscussion($connector);
 
         $connector->threadMessages[100] = [
-            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'closed' => 0],
-            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'closed' => 0],
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'status' => 2],
         ];
 
         $this->command()->runStep($connector);
