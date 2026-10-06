@@ -63,10 +63,23 @@ class Connector {
 
 	public function getForums() {
 		try {
-			$p_forum_query = "SELECT forum_id, name, description, parent_id, display_order FROM {$this->table_prefix}forums WHERE active = 1 ORDER BY forum_id";
+			$p_forum_query = "SELECT forum_id, name, description, parent_id, display_order, pub_perms, reg_perms FROM {$this->table_prefix}forums WHERE active = 1 ORDER BY forum_id";
 			return $this->pdo->query($p_forum_query);
 		} catch (\PDOException $pdo_exception) {
 			throw new ConnectorException('Could not query forums from Phorum', 1, $pdo_exception);
+		}
+	}
+
+	/**
+	 * Per-group forum permissions. `permission` is a bitmask of Phorum's
+	 * PHORUM_USER_ALLOW_* constants, same as forums.pub_perms/reg_perms.
+	 */
+	public function getForumGroupPermissions() {
+		try {
+			$p_forum_group_query = "SELECT forum_id, group_id, permission FROM {$this->table_prefix}forum_group_xref ORDER BY forum_id, group_id";
+			return $this->pdo->query($p_forum_group_query);
+		} catch (\PDOException $pdo_exception) {
+			throw new ConnectorException('Could not query forum group permissions from Phorum', 1, $pdo_exception);
 		}
 	}
 
@@ -91,7 +104,7 @@ class Connector {
 	 */
 	public function getAllThreadMessages() {
 		try {
-			$p_thread_messages_query = "SELECT thread, message_id, user_id, body, closed, datestamp FROM {$this->table_prefix}messages ORDER BY thread, datestamp, message_id";
+			$p_thread_messages_query = "SELECT thread, message_id, user_id, body, status, datestamp FROM {$this->table_prefix}messages ORDER BY thread, datestamp, message_id";
 			return $this->pdo->query($p_thread_messages_query);
 		} catch (\PDOException $pdo_exception) {
 			throw new ConnectorException('Could not query thread messages from Phorum', 1, $pdo_exception);

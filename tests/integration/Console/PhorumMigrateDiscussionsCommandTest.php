@@ -40,7 +40,7 @@ class PhorumMigrateDiscussionsCommandTest extends TestCase
             ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
         ];
         $connector->forums = [
-            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1],
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
 
         // Separate command instances, mirroring separate `phorum:migrate:users` /

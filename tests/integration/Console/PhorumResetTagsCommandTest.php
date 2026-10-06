@@ -62,7 +62,7 @@ class PhorumResetTagsCommandTest extends TestCase
         $connector->users = [
             ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
         ];
-        $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1]];
+        $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15]];
         $connector->threadStartingMessages = [
             ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
         ];
@@ -86,7 +86,7 @@ class PhorumResetTagsCommandTest extends TestCase
     public function it_aborts_and_deletes_nothing_when_confirmation_is_declined()
     {
         $connector = new FakeConnector();
-        $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1]];
+        $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15]];
         $tags = $this->tagsCommand()->runStep($connector);
 
         $tester = $this->resetCommandTester();

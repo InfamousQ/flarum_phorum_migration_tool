@@ -16,6 +16,7 @@ class FakeConnector extends Connector
     public array $users = [];
     public array $userGroupMap = [];
     public array $forums = [];
+    public array $forumGroupPermissions = [];
     public array $threadStartingMessages = [];
 
     /** @var array Keyed by Phorum thread id => array of message rows */
@@ -44,6 +45,11 @@ class FakeConnector extends Connector
     public function getForums()
     {
         return $this->forums;
+    }
+
+    public function getForumGroupPermissions()
+    {
+        return $this->forumGroupPermissions;
     }
 
     public function getThreadStartingMessages($limit = null)
