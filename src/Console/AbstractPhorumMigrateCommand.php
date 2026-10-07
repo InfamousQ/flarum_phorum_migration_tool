@@ -50,6 +50,17 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	/** flarum/suspend's notification types (UserSuspendedBlueprint/UserUnsuspendedBlueprint::getType()) */
 	const SUSPEND_NOTIFICATION_TYPES = ['userSuspended', 'userUnsuspended'];
 
+	/**
+	 * Phorum stores messages posted by guests (and by users deleted since) with
+	 * user_id 0. They are attributed to a single placeholder Flarum user, mapped
+	 * under this Phorum id like any other migrated user.
+	 */
+	const PHORUM_GUEST_USER_ID = 0;
+	const GUEST_USERNAME = 'Guest';
+	/** .invalid is reserved (RFC 2606), so no password reset mail can ever be delivered */
+	const GUEST_EMAIL = 'phorum-guest@phorum-migration.invalid';
+	const GUEST_SUSPEND_REASON = 'Placeholder author for Phorum guest messages';
+
 	/** @var SettingsRepositoryInterface */
 	protected $settings;
 
@@ -120,8 +131,23 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 
 	/** @return int[] Discussion id keyed by Phorum thread id */
 	protected function loadDiscussionMap() : array {
-		return PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
-			->pluck('flarum_id', 'phorum_id')
+		return $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_DISCUSSION, 'discussions');
+	}
+
+	/**
+	 * Phorum id => Flarum id map for one data type, leaving out mapping rows whose
+	 * Flarum record no longer exists (e.g. deleted inside Flarum since), so those
+	 * Phorum records are treated as not yet migrated.
+	 *
+	 * @param int $data_type One of the PhorumMapping::DATA_TYPE_* constants
+	 * @param string $flarum_table Table the mapped Flarum ids point into
+	 * @return int[] Keyed by phorum_id
+	 */
+	protected function loadLiveIdMap(int $data_type, string $flarum_table) : array {
+		return PhorumMapping::query()
+			->join($flarum_table, "{$flarum_table}.id", '=', 'phorum_mapping.flarum_id')
+			->where('phorum_mapping.phorum_data_type', $data_type)
+			->pluck('phorum_mapping.flarum_id', 'phorum_mapping.phorum_id')
 			->all();
 	}
 
@@ -195,16 +221,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				} else {
 					// Inactive in Phorum but has messages: keep the account so the
 					// messages keep their author, but block it from doing anything.
-					$user->suspended_until = Carbon::parse(self::SUSPENDED_INDEFINITELY_UNTIL);
-					$user->suspend_reason = self::INACTIVE_SUSPEND_REASON;
-					// Setting the columns directly sends no notification (flarum/suspend only
-					// notifies when a suspension is changed through Flarum's user-edit flow).
-					// Also opt the user out of suspend/unsuspend emails, so a later change
-					// to this suspension in the admin panel doesn't email someone who left
-					// Phorum. Flarum checks this preference, not is_email_confirmed.
-					foreach (self::SUSPEND_NOTIFICATION_TYPES as $type) {
-						$user->setPreference(User::getNotificationPreferenceKey($type, 'email'), false);
-					}
+					$this->suspendIndefinitely($user, self::INACTIVE_SUSPEND_REASON);
 				}
 			} else {
 				// Merged into an account that already existed in Flarum: its confirmation
@@ -224,6 +241,69 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		}
 
 		return $users_created;
+	}
+
+	/**
+	 * Suspend a not-yet-saved user indefinitely. Setting the columns directly sends no
+	 * notification (flarum/suspend only notifies when a suspension is changed through
+	 * Flarum's user-edit flow). Also opts the user out of suspend/unsuspend emails, so a
+	 * later change to this suspension in the admin panel doesn't email anyone. Flarum
+	 * checks this preference, not is_email_confirmed.
+	 */
+	protected function suspendIndefinitely(User $user, string $reason) {
+		$user->suspended_until = Carbon::parse(self::SUSPENDED_INDEFINITELY_UNTIL);
+		$user->suspend_reason = $reason;
+		foreach (self::SUSPEND_NOTIFICATION_TYPES as $type) {
+			$user->setPreference(User::getNotificationPreferenceKey($type, 'email'), false);
+		}
+	}
+
+	/**
+	 * Flarum author for a Phorum message: the mapped user, or for Phorum's guest
+	 * user id the placeholder guest user (created on first use and added to $users).
+	 *
+	 * @param mixed $p_user_id
+	 * @param User[] $users Keyed by Phorum user id
+	 * @return User|null Null when the Phorum user isn't mapped
+	 */
+	protected function resolveAuthor($p_user_id, array &$users) : ?User {
+		if (null === $p_user_id) {
+			return null;
+		}
+		if (isset($users[$p_user_id])) {
+			return $users[$p_user_id];
+		}
+		if (self::PHORUM_GUEST_USER_ID !== (int) $p_user_id) {
+			return null;
+		}
+
+		$users[self::PHORUM_GUEST_USER_ID] = $this->getOrCreateGuestUser();
+		return $users[self::PHORUM_GUEST_USER_ID];
+	}
+
+	/**
+	 * The placeholder author for Phorum guest messages. Nobody can use the account:
+	 * its random password is never shown, its email is unconfirmed and on the reserved
+	 * .invalid domain (so "forgot password" can't reach anyone), it belongs to no
+	 * group, and it is suspended indefinitely.
+	 */
+	protected function getOrCreateGuestUser() : User {
+		$user_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_USER, self::PHORUM_GUEST_USER_ID);
+		$user = null !== $user_id ? User::find($user_id) : null;
+		if (null === $user) {
+			// Mapping row lost but the account from an earlier run survived
+			$user = User::where('email', self::GUEST_EMAIL)->first();
+		}
+		if (null === $user) {
+			$user = User::register($this->resolveUsername(self::GUEST_USERNAME, null), self::GUEST_EMAIL, Str::random(40));
+			$this->suspendIndefinitely($user, self::GUEST_SUSPEND_REASON);
+			$user->saveOrFail();
+			$this->output->writeln("Phorum guest messages - Generated placeholder Flarum user {$user->id}");
+			$user->refresh();
+		}
+		PhorumMapping::setFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_USER, self::PHORUM_GUEST_USER_ID, $user->id);
+
+		return $user;
 	}
 
 	/**
@@ -440,9 +520,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
 		// First message is thread starter in Flarum
 		$p_thread_starting_messages = $connector->getThreadStartingMessages();
-		$discussion_mapping = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
-			->pluck('flarum_id', 'phorum_id')
-			->all();
+		$discussion_mapping = $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_DISCUSSION, 'discussions');
 		$default_locale = $this->settings->get('default_locale', 'en');
 
 		$discussions = [];
@@ -464,9 +542,8 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$p_message_is_sticky = $p_msg['sort'] == 1;
 			// Phorum thread is locked if it's starting message is marked to have 'closed' attribute
 			$p_message_is_locked = $p_msg['closed'] == 1;
-			$author_user = $users[$p_user_id] ?? null;
+			$author_user = $this->resolveAuthor($p_user_id, $users);
 			if (null === $author_user) {
-				// TODO: Create tmp user
 				$this->logger->critical('Unknown Phorum user id', ['user_id' => $p_user_id]);
 				continue;
 			}
@@ -525,6 +602,10 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			}
 
 			PhorumMapping::query()->getConnection()->table('discussion_tag')->insert($pivot_rows);
+			// Drop stale rows left by threads whose discussion was deleted in Flarum
+			PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
+				->whereIn('phorum_id', array_column($mapping_rows, 'phorum_id'))
+				->delete();
 			PhorumMapping::insert($mapping_rows);
 		}
 
@@ -553,9 +634,9 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	/**
 	 * Import every reply for every thread. Messages are fetched from Phorum
 	 * in a single bulk query and grouped by thread in memory, and the
-	 * Phorum-id-to-Flarum-id mapping table is preloaded/batch-inserted once,
-	 * instead of once per message, to avoid tens of thousands of per-post
-	 * round trips.
+	 * Phorum-id-to-Flarum-id mapping table is preloaded once and batch-inserted
+	 * per thread, instead of once per message, to avoid tens of thousands of
+	 * per-post round trips.
 	 *
 	 * @param Connector $connector
 	 * @param array $p_discussions Discussion id keyed by Phorum thread id
@@ -567,24 +648,16 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$p_messages_by_thread[$p_msg['thread']][] = $p_msg;
 		}
 
-		$message_id_to_post_id = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
-			->pluck('flarum_id', 'phorum_id')
-			->all();
+		$message_id_to_post_id = $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_MESSAGE, 'posts');
 
-		$new_mappings = [];
 		foreach ($p_discussions as $p_thread_id => $discussion_id) {
 			$this->importPhorumMessageForThread(
 				$p_thread_id,
 				$discussion_id,
 				$users,
 				$p_messages_by_thread[$p_thread_id] ?? [],
-				$message_id_to_post_id,
-				$new_mappings
+				$message_id_to_post_id
 			);
-		}
-
-		foreach (array_chunk($new_mappings, 500) as $chunk) {
-			PhorumMapping::insert($chunk);
 		}
 
 		$this->refreshUserPostCounts($users);
@@ -605,77 +678,93 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	}
 
 	/**
+	 * Import one thread's messages in a single transaction, together with their
+	 * phorum_mapping rows, so a failure part way through a run never leaves posts
+	 * without a mapping row (which a re-run would then import a second time).
+	 *
 	 * @param int $phorum_thread_id
 	 * @param int $discussion_id
-	 * @param User[] $users
+	 * @param User[] $users Keyed by Phorum user id. The guest placeholder is added on first use.
 	 * @param array $p_thread_messages Messages belonging to this thread, in order
 	 * @param array $message_id_to_post_id Phorum message id => Flarum post id, shared across threads
-	 * @param array $new_mappings Rows to bulk-insert into phorum_mapping, shared across threads
+	 * @return Post[]
 	 */
-	protected function importPhorumMessageForThread(int $phorum_thread_id, $discussion_id, array $users, array $p_thread_messages, array &$message_id_to_post_id, array &$new_mappings) {
+	protected function importPhorumMessageForThread(int $phorum_thread_id, $discussion_id, array &$users, array $p_thread_messages, array &$message_id_to_post_id) {
 		$this->output->writeln("Reading messages for Phorum thread {$phorum_thread_id}");
-		/** @var Post[] $posts */
-		$posts = [];
 		$discussion = Discussion::find($discussion_id);
-		foreach ($p_thread_messages as $p_msg) {
-			$p_message_id = $p_msg['message_id'] ?? null;
-			$p_user_id = $p_msg['user_id'] ?? null;
-			$p_body = PhorumBbcodeCompatibility::transform($p_msg['body'] ?? '');
-			$p_created = $p_msg['datestamp'] ?? null;
-			// Anything not PHORUM_STATUS_APPROVED (2) - i.e. on hold (-1) or hidden by a
-			// moderator (-2) - must not become publicly visible in Flarum. Same rule as
-			// thread starting messages in importPhorumMessagesAsDiscussions().
-			// Note: Phorum's `closed` column means the thread is locked, not hidden.
-			$p_is_hidden = (int) ($p_msg['status'] ?? 2) < 2;
+		if (null === $discussion) {
+			$this->logger->critical('Mapped Discussion not found', ['thread id' => $phorum_thread_id, 'discussion id' => $discussion_id]);
+			return [];
+		}
 
-			$author_user = $users[$p_user_id] ?? null;
-			if (null === $author_user) {
-				// TODO: Create tmp user
-				$this->logger->critical('Unknown Phorum user id', ['user_id' => $p_user_id]);
-				continue;
-			}
+		return PhorumMapping::query()->getConnection()->transaction(function () use ($discussion, &$users, $p_thread_messages, &$message_id_to_post_id) {
+			/** @var Post[] $posts */
+			$posts = [];
+			$new_mappings = [];
+			foreach ($p_thread_messages as $p_msg) {
+				$p_message_id = $p_msg['message_id'] ?? null;
+				$p_user_id = $p_msg['user_id'] ?? null;
+				$p_body = PhorumBbcodeCompatibility::transform($p_msg['body'] ?? '');
+				$p_created = $p_msg['datestamp'] ?? null;
+				// Anything not PHORUM_STATUS_APPROVED (2) - i.e. on hold (-1) or hidden by a
+				// moderator (-2) - must not become publicly visible in Flarum. Same rule as
+				// thread starting messages in importPhorumMessagesAsDiscussions().
+				// Note: Phorum's `closed` column means the thread is locked, not hidden.
+				$p_is_hidden = (int) ($p_msg['status'] ?? 2) < 2;
 
-			$post_id = $message_id_to_post_id[$p_message_id] ?? null;
-			/** @var \Flarum\Post\CommentPost $post */
-			if (null === $post_id) {
-				$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created);
-				$post->save();
-				$message_id_to_post_id[$p_message_id] = $post->id;
-				$new_mappings[] = [
-					'phorum_data_type' => PhorumMapping::DATA_TYPE_MESSAGE,
-					'phorum_id' => (int) $p_message_id,
-					'flarum_id' => (int) $post->id,
-					'existing' => false,
-				];
-			} else {
-				$post = $discussion->posts->find($post_id);
-				if (null === $post) {
-					// Post found but it is not in expected Discussion. Log error and skip
-					$this->logger->critical('Post linked to wrong Discussion', ['post id' => $post_id, 'discussion id' => $discussion->id]);
+				$author_user = $this->resolveAuthor($p_user_id, $users);
+				if (null === $author_user) {
+					$this->logger->critical('Unknown Phorum user id', ['user_id' => $p_user_id]);
 					continue;
 				}
+
+				$post_id = $message_id_to_post_id[$p_message_id] ?? null;
+				/** @var \Flarum\Post\CommentPost $post */
+				if (null === $post_id) {
+					$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created);
+					$post->save();
+					$message_id_to_post_id[$p_message_id] = $post->id;
+					$new_mappings[] = [
+						'phorum_data_type' => PhorumMapping::DATA_TYPE_MESSAGE,
+						'phorum_id' => (int) $p_message_id,
+						'flarum_id' => (int) $post->id,
+						'existing' => false,
+					];
+				} else {
+					$post = $discussion->posts->find($post_id);
+					if (null === $post) {
+						// Post found but it is not in expected Discussion. Log error and skip
+						$this->logger->critical('Post linked to wrong Discussion', ['post id' => $post_id, 'discussion id' => $discussion->id]);
+						continue;
+					}
+				}
+
+				if ($p_is_hidden) {
+					$post
+						->hide()
+						->save();
+				}
+				$posts[] = $post;
 			}
 
-			if ($p_is_hidden) {
-				$post
-					->hide()
-					->save();
+			if (!empty($new_mappings)) {
+				// Drop stale rows left by messages whose post was deleted in Flarum
+				PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
+					->whereIn('phorum_id', array_column($new_mappings, 'phorum_id'))
+					->delete();
+				PhorumMapping::insert($new_mappings);
 			}
-			$posts[] = $post;
-		}
 
-		if (!empty($posts)) {
-			$first_post = reset($posts);
-			$discussion->setFirstPost($first_post);
-			$last_post = end($posts);
-			$discussion->setLastPost($last_post);
-			$discussion->comment_count = count($posts);
-			$discussion->participant_count = count(array_unique(array_map(function ($post) {
-				return $post->user_id;
-			}, $posts)));
-			$discussion->save();
-		}
+			if (!empty($posts)) {
+				$discussion->setFirstPost(reset($posts));
+				// Core's own counter definitions, which leave out hidden posts
+				$discussion->refreshLastPost();
+				$discussion->refreshCommentCount();
+				$discussion->refreshParticipantCount();
+				$discussion->save();
+			}
 
-		return $posts;
+			return $posts;
+		});
 	}
 }
