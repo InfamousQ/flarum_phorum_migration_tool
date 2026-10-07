@@ -331,7 +331,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$tag = null !== $tag_id ? Tag::find($tag_id) : null;
 			$existing = null !== $tag;
 			if (null === $tag) {
-				$tag = Tag::build($p_forum_name, $p_forum_name, $p_forum_description, '#888', null, true);
+				$tag = Tag::build($p_forum_name, $this->resolveTagSlug($p_forum_name, $p_forum_id), $p_forum_description, '#888', null, false);
 				$tag->position = $p_forum_position;
 				$tag->is_restricted = !$p_forum_is_public;
 				$tag->save();
@@ -348,6 +348,26 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$tags[$p_forum_id] = $tag;
 		}
 		return $tags;
+	}
+
+	/**
+	 * URL-safe, unique tag slug for a Phorum forum name. Falls back to "forum-<id>"
+	 * when the name has nothing sluggable in it, and appends "-2", "-3", ... when the
+	 * slug is already taken (e.g. two Phorum forums with the same name), since
+	 * tags.slug is unique.
+	 */
+	protected function resolveTagSlug(string $p_forum_name, int $p_forum_id) : string {
+		$base_slug = Str::slug($p_forum_name, '-', $this->settings->get('default_locale', 'en'));
+		if ('' === $base_slug) {
+			$base_slug = "forum-{$p_forum_id}";
+		}
+
+		$slug = $base_slug;
+		for ($suffix = 2; Tag::where('slug', $slug)->exists(); $suffix++) {
+			$slug = "{$base_slug}-{$suffix}";
+		}
+
+		return $slug;
 	}
 
 	/**

@@ -291,7 +291,7 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
-    public function it_creates_a_hidden_tag_for_each_active_phorum_forum()
+    public function it_creates_a_visible_tag_for_each_active_phorum_forum()
     {
         $connector = new FakeConnector();
         $connector->forums = [
@@ -301,7 +301,8 @@ class PhorumMigrateCommandTest extends TestCase
         $tags = $this->command()->runImportPhorumForumsAsTags($connector);
 
         $this->assertSame('Phorum General', $tags[10]->name);
-        $this->assertTrue((bool) $tags[10]->is_hidden);
+        $this->assertSame('phorum-general', $tags[10]->slug);
+        $this->assertFalse((bool) $tags[10]->is_hidden);
         $this->assertSame($tags[10]->id, PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, 10));
     }
 
