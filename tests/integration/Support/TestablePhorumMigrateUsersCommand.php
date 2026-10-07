@@ -20,4 +20,9 @@ class TestablePhorumMigrateUsersCommand extends PhorumMigrateUsersCommand
     {
         return $this->importUsers($connector);
     }
+
+    public function runPreflight(Connector $connector): bool
+    {
+        return $this->runPreflightChecks($connector);
+    }
 }

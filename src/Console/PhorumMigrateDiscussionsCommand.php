@@ -35,6 +35,10 @@ class PhorumMigrateDiscussionsCommand extends AbstractPhorumMigrateCommand {
 		}
 
 		$connector = $this->buildConnector();
+		// The guest placeholder user may be created in this step
+		if (!$this->runPreflightChecks($connector)) {
+			return 1;
+		}
 		$discussions = $this->importPhorumMessagesAsDiscussions($connector, $users, $tags);
 
 		$this->output->writeln(sprintf('Done. %d Phorum thread(s) mapped to Flarum discussions.', count($discussions)));

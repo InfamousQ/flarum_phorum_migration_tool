@@ -6,10 +6,14 @@ use InfamousQ\FlarumPhorumMigrationTool\Bbcode\PhorumBbcodeCompatibility;
 use InfamousQ\FlarumPhorumMigrationTool\Phorum\Connector;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\PreflightCheck;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\UsernameCheck;
+use InfamousQ\FlarumPhorumMigrationTool\Support\Username;
 use Flarum\Console\AbstractCommand;
 use Flarum\Discussion\Discussion;
 use Flarum\Group\Group;
 use Flarum\Group\Permission;
+use Flarum\Post\Post;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
@@ -39,6 +43,8 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	const PHORUM_ALLOW_READ = 1;
 	const PHORUM_ALLOW_REPLY = 2;
 	const PHORUM_ALLOW_NEW_TOPIC = 8;
+	/** Members can read, reply and start threads: the only forum a Flarum tag can model without being restricted */
+	const PHORUM_ALLOW_OPEN = self::PHORUM_ALLOW_READ | self::PHORUM_ALLOW_REPLY | self::PHORUM_ALLOW_NEW_TOPIC;
 
 	/** Phorum's PHORUM_USER_ACTIVE (include/api/user.php). Anything else is inactive or pending. */
 	const PHORUM_USER_ACTIVE = 1;
@@ -74,6 +80,35 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		if ($this->output->isVerbose()) {
 			$this->setLogger(new ConsoleLogger());
 		}
+	}
+
+	/**
+	 * @return PreflightCheck[] Checks run before a migration command writes anything
+	 */
+	protected function preflightChecks() : array {
+		return [new UsernameCheck()];
+	}
+
+	/**
+	 * Run every pre-flight check and print the problems they find.
+	 *
+	 * @return bool False when any check found a problem, so the migration must not start
+	 */
+	protected function runPreflightChecks(Connector $connector) : bool {
+		$problems = [];
+		foreach ($this->preflightChecks() as $check) {
+			array_push($problems, ...$check->run($connector));
+		}
+		if (empty($problems)) {
+			return true;
+		}
+
+		$this->output->writeln('<error>Pre-flight checks failed, nothing was migrated:</error>');
+		foreach ($problems as $problem) {
+			$this->output->writeln("  - {$problem}");
+		}
+
+		return false;
 	}
 
 	protected function buildConnector() : Connector {
@@ -194,22 +229,18 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				continue;
 			}
 
-			// Fail closed on a missing `active` (treat as inactive), but fail open on a
-			// missing message count (assume messages exist) so no authorship is dropped.
-			$p_is_active = (int) ($p_user_row['active'] ?? 0) === self::PHORUM_USER_ACTIVE;
-			$p_has_messages = !isset($p_user_row['message_count']) || (int) $p_user_row['message_count'] > 0;
-			if (!$p_is_active && !$p_has_messages) {
-				// Deactivated or never-confirmed account that never posted - in practice
-				// almost always a spam sign-up. Nothing references it, so don't create it.
+			if (!self::shouldImportPhorumUser($p_user_row)) {
 				$this->output->writeln("Phorum user {$phorum_user_id} - Skipped, inactive with no messages");
 				continue;
 			}
+			$p_is_active = self::isActivePhorumUser($p_user_row);
+			$desired_username = Username::fromPhorumName((string) ($p_user_row['display_name'] ?? ''), (int) $phorum_user_id);
 
 			$existing = false;
 			// No existing mapped user, see if we have user with same email already
 			$user = User::where(['email' => $p_user_row['email']])->first();
 			if (null === $user) {
-				$username = $this->resolveUsername($p_user_row['display_name'], null);
+				$username = $this->resolveUsername($desired_username, null);
 				// Phorum's password hashes aren't carried over, so give the account an
 				// unguessable random password - users regain access via "forgot password".
 				$user = User::register($username, $p_user_row['email'], Str::random(40));
@@ -228,7 +259,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				// and suspension state are left untouched. Confirming it here would hand
 				// whoever registered it a verified account carrying the Phorum identity.
 				$existing = true; // This use previously existed already!
-				$username = $this->resolveUsername($p_user_row['display_name'], $user->id);
+				$username = $this->resolveUsername($desired_username, $user->id);
 				$user->rename($username);
 				$user->changeEmail($p_user_row['email']);
 			}
@@ -241,6 +272,22 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		}
 
 		return $users_created;
+	}
+
+	/**
+	 * Deactivated or never-confirmed accounts that never posted are not imported: in
+	 * practice almost always spam sign-ups, and nothing references them. Fails closed
+	 * on a missing `active` (treated as inactive), but open on a missing message count
+	 * (messages assumed to exist) so no authorship is dropped.
+	 */
+	public static function shouldImportPhorumUser(array $p_user_row) : bool {
+		$p_has_messages = !isset($p_user_row['message_count']) || (int) $p_user_row['message_count'] > 0;
+
+		return self::isActivePhorumUser($p_user_row) || $p_has_messages;
+	}
+
+	protected static function isActivePhorumUser(array $p_user_row) : bool {
+		return (int) ($p_user_row['active'] ?? 0) === self::PHORUM_USER_ACTIVE;
 	}
 
 	/**
@@ -267,7 +314,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * @return User|null Null when the Phorum user isn't mapped
 	 */
 	protected function resolveAuthor($p_user_id, array &$users) : ?User {
-		if (null === $p_user_id) {
+		if (!is_numeric($p_user_id)) {
 			return null;
 		}
 		if (isset($users[$p_user_id])) {
@@ -313,24 +360,23 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * insert/rename would otherwise collide).
 	 *
 	 * If the desired username is already taken by a different user, "_migrated"
-	 * is appended. If that is taken too, migration cannot proceed for this user.
+	 * is appended. If that is taken too, migration cannot proceed for this user;
+	 * UsernameCheck reports such users before the migration starts.
 	 *
-	 * @param string $desired_username
+	 * @param string $desired_username A valid Flarum username, see Username::fromPhorumName()
 	 * @param int|null $excluding_user_id Id of the Flarum user this Phorum user
 	 *   is being merged into/updating, if any - its own current username must
 	 *   not count as a collision against itself.
 	 * @return string
 	 */
 	protected function resolveUsername(string $desired_username, ?int $excluding_user_id) : string {
-		if (!$this->usernameTakenByAnotherUser($desired_username, $excluding_user_id)) {
-			return $desired_username;
+		foreach (Username::candidates($desired_username) as $candidate) {
+			if (!$this->usernameTakenByAnotherUser($candidate, $excluding_user_id)) {
+				return $candidate;
+			}
 		}
 
-		$migrated_username = $desired_username . '_migrated';
-		if (!$this->usernameTakenByAnotherUser($migrated_username, $excluding_user_id)) {
-			return $migrated_username;
-		}
-
+		[, $migrated_username] = Username::candidates($desired_username);
 		throw new \RuntimeException("Cannot migrate Phorum user '{$desired_username}': both '{$desired_username}' and '{$migrated_username}' are already taken by different Flarum users.");
 	}
 
@@ -390,9 +436,12 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	}
 
 	/**
-	 * Phorum forums become tags. A forum guests could not read in Phorum (no
-	 * PHORUM_USER_ALLOW_READ in pub_perms) becomes a restricted tag, readable only by
-	 * the groups that could read it in Phorum - see grantRestrictedTagPermissions().
+	 * Phorum forums become tags. Only a forum guests can read and members can read,
+	 * reply to and start threads in becomes an unrestricted tag. Any other forum
+	 * becomes a restricted tag, since Flarum can only limit replying or starting
+	 * discussions per tag on a restricted one: e.g. a read-only announcements forum,
+	 * or one guests could not read (no PHORUM_USER_ALLOW_READ in pub_perms). See
+	 * grantRestrictedTagPermissions() for what each group may do there.
 	 * Only applied when the tag is first created; an already-mapped tag's
 	 * restriction/permissions are left as-is, as they may have been edited in Flarum.
 	 */
@@ -401,25 +450,28 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		$p_forum_group_perms = $this->loadForumGroupPermissions($connector);
 		$tags = [];
 		foreach ($p_forums as $p_forum) {
-			$p_forum_id = (int) $p_forum['forum_id'] ?? 0;
+			$p_forum_id = (int) ($p_forum['forum_id'] ?? 0);
 			$p_forum_name = $p_forum['name'] ?? '';
 			$p_forum_description = $p_forum['description'] ?? '';
 			$p_forum_position = $p_forum['display_order'] ?? null;
 			// Fail closed: a forum with unknown permissions is treated as non-public.
 			$p_forum_is_public = ((int) ($p_forum['pub_perms'] ?? 0) & self::PHORUM_ALLOW_READ) !== 0;
+			$p_reg_perms = (int) ($p_forum['reg_perms'] ?? 0);
+			$p_forum_is_open = $p_forum_is_public && ($p_reg_perms & self::PHORUM_ALLOW_OPEN) === self::PHORUM_ALLOW_OPEN;
 			$tag_id = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, $p_forum_id);
 			$tag = null !== $tag_id ? Tag::find($tag_id) : null;
 			$existing = null !== $tag;
 			if (null === $tag) {
 				$tag = Tag::build($p_forum_name, $this->resolveTagSlug($p_forum_name, $p_forum_id), $p_forum_description, '#888', null, false);
 				$tag->position = $p_forum_position;
-				$tag->is_restricted = !$p_forum_is_public;
+				$tag->is_restricted = !$p_forum_is_open;
 				$tag->save();
 				$tag->refresh();
-				if (!$p_forum_is_public) {
+				if (!$p_forum_is_open) {
 					$this->grantRestrictedTagPermissions(
 						$tag,
-						(int) ($p_forum['reg_perms'] ?? 0),
+						$p_forum_is_public,
+						$p_reg_perms,
 						$p_forum_group_perms[$p_forum_id] ?? []
 					);
 				}
@@ -471,18 +523,25 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	}
 
 	/**
-	 * Grant tag-scoped permissions on a restricted tag: to Members per the forum's
-	 * reg_perms, and to each mapped group per its forum_group_xref bitmask.
+	 * Grant tag-scoped permissions on a restricted tag: viewing to Guests if guests
+	 * could read the forum, to Members per the forum's reg_perms, and to each mapped
+	 * group per its forum_group_xref bitmask. Flarum gives Guests' permissions to
+	 * everyone, so a public forum stays readable by all. Guests never get posting
+	 * permissions, Flarum doesn't support guest posting.
 	 * Phorum's moderation bits are not translated - grant those by hand in Flarum.
 	 *
 	 * @param Tag $tag
+	 * @param bool $guests_can_read Whether the forum's pub_perms allowed reading
 	 * @param int $reg_perms Phorum bitmask for registered users
 	 * @param array $group_perms Flarum group id => Phorum bitmask
 	 */
-	protected function grantRestrictedTagPermissions(Tag $tag, int $reg_perms, array $group_perms) {
+	protected function grantRestrictedTagPermissions(Tag $tag, bool $guests_can_read, int $reg_perms, array $group_perms) {
 		$group_perms[Group::MEMBER_ID] = ($group_perms[Group::MEMBER_ID] ?? 0) | $reg_perms;
 
 		$rows = [];
+		if ($guests_can_read) {
+			$rows[] = ['group_id' => Group::GUEST_ID, 'permission' => "tag{$tag->id}.viewForum"];
+		}
 		foreach ($group_perms as $group_id => $phorum_perms) {
 			if (!($phorum_perms & self::PHORUM_ALLOW_READ)) {
 				continue;
@@ -513,11 +572,11 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * doing its own insert+refresh+pivot-save+mapping-write round trips.
 	 *
 	 * @param Connector $connector
-	 * @param User[] $users . Key is Phorum user id
+	 * @param User[] $users . Key is Phorum user id. The guest placeholder is added on first use.
 	 * @param Tag[] $tags . Key is Phorum forum id
 	 * @return int[] Discussion id keyed by Phorum thread id
 	 */
-	protected function importPhorumMessagesAsDiscussions(Connector $connector, $users, array $tags) : array {
+	protected function importPhorumMessagesAsDiscussions(Connector $connector, array &$users, array $tags) : array {
 		// First message is thread starter in Flarum
 		$p_thread_starting_messages = $connector->getThreadStartingMessages();
 		$discussion_mapping = $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_DISCUSSION, 'discussions');
@@ -526,18 +585,20 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		$discussions = [];
 		/** @var array $pending_discussions List of ['thread_id' => , 'tag_id' => , 'row' => []] awaiting bulk insert */
 		$pending_discussions = [];
+		/** @var User[] $new_discussion_authors Keyed by Flarum user id */
+		$new_discussion_authors = [];
 		foreach ($p_thread_starting_messages as $p_msg) {
-			$p_forum_id = (int) $p_msg['forum_id'] ?? 0;
+			$p_forum_id = (int) ($p_msg['forum_id'] ?? 0);
 			$p_thread_id = $p_msg['thread'] ?? null;
-			$p_user_id = (int) $p_msg['user_id'] ?? null;
-			$p_subject = (string) $p_msg['subject'] ?? '';
+			$p_user_id = $p_msg['user_id'] ?? null;
+			$p_subject = (string) ($p_msg['subject'] ?? '');
 			/**
 			 * Phorum's message's status can be either..
 			 * 2 = PHORUM_STATUS_APPROVED
 			 * -1 = PHORUM_STATUS_HOLD
 			 * -2 = PHORUM_STATUS_HIDDEN
 			 */
-			$p_status_int = (int) $p_msg['status'] ?? 2;
+			$p_status_int = (int) ($p_msg['status'] ?? 2);
 			// Phorum thread is sticky if it's starting message is marked to have own special sort value
 			$p_message_is_sticky = $p_msg['sort'] == 1;
 			// Phorum thread is locked if it's starting message is marked to have 'closed' attribute
@@ -581,35 +642,54 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				'tag_id' => $tag->id,
 				'row' => $row,
 			];
+			$new_discussion_authors[$author_user->id] = $author_user;
 		}
 
+		$connection = PhorumMapping::query()->getConnection();
 		foreach (array_chunk($pending_discussions, 500) as $chunk) {
-			$first_id = $this->bulkInsertAndGetFirstId('discussions', array_column($chunk, 'row'));
+			// One transaction per chunk, so discussions are never left without their
+			// mapping rows (which a re-run would then create a second time)
+			$connection->transaction(function () use ($chunk, &$discussions) {
+				$this->insertPendingDiscussions($chunk, $discussions);
+			});
+		}
 
-			$pivot_rows = [];
-			$mapping_rows = [];
-			foreach ($chunk as $i => $pending) {
-				$discussion_id = $first_id + $i;
-				$discussions[$pending['thread_id']] = $discussion_id;
-				$pivot_rows[] = ['discussion_id' => $discussion_id, 'tag_id' => $pending['tag_id']];
-				$mapping_rows[] = [
-					'phorum_data_type' => PhorumMapping::DATA_TYPE_DISCUSSION,
-					'phorum_id' => (int) $pending['thread_id'],
-					'flarum_id' => $discussion_id,
-					'existing' => false,
-				];
-				$this->output->writeln("Discussion - created new discussion");
-			}
-
-			PhorumMapping::query()->getConnection()->table('discussion_tag')->insert($pivot_rows);
-			// Drop stale rows left by threads whose discussion was deleted in Flarum
-			PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
-				->whereIn('phorum_id', array_column($mapping_rows, 'phorum_id'))
-				->delete();
-			PhorumMapping::insert($mapping_rows);
+		// Bulk inserts bypass the events that keep users.discussion_count in sync
+		foreach ($new_discussion_authors as $author_user) {
+			$author_user->refreshDiscussionCount()->save();
 		}
 
 		return $discussions;
+	}
+
+	/**
+	 * @param array $chunk List of ['thread_id' => , 'tag_id' => , 'row' => []]
+	 * @param int[] $discussions Discussion id keyed by Phorum thread id, new ones are added
+	 */
+	protected function insertPendingDiscussions(array $chunk, array &$discussions) {
+		$first_id = $this->bulkInsertAndGetFirstId('discussions', array_column($chunk, 'row'));
+
+		$pivot_rows = [];
+		$mapping_rows = [];
+		foreach ($chunk as $i => $pending) {
+			$discussion_id = $first_id + $i;
+			$discussions[$pending['thread_id']] = $discussion_id;
+			$pivot_rows[] = ['discussion_id' => $discussion_id, 'tag_id' => $pending['tag_id']];
+			$mapping_rows[] = [
+				'phorum_data_type' => PhorumMapping::DATA_TYPE_DISCUSSION,
+				'phorum_id' => (int) $pending['thread_id'],
+				'flarum_id' => $discussion_id,
+				'existing' => false,
+			];
+			$this->output->writeln("Discussion - created new discussion");
+		}
+
+		PhorumMapping::query()->getConnection()->table('discussion_tag')->insert($pivot_rows);
+		// Drop stale rows left by threads whose discussion was deleted in Flarum
+		PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)
+			->whereIn('phorum_id', array_column($mapping_rows, 'phorum_id'))
+			->delete();
+		PhorumMapping::insert($mapping_rows);
 	}
 
 	/**
@@ -669,11 +749,29 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * and users.comment_count in sync never fire. Recompute both counters for
 	 * every migrated user using core's own definition of them.
 	 *
+	 * Also moves each user's join date back to their first post, since a user
+	 * created by the migration otherwise "joined" years after writing their posts.
+	 * A join date already earlier than the first post is kept.
+	 *
 	 * @param User[] $users
 	 */
 	protected function refreshUserPostCounts(array $users) {
+		$first_posted_at = Post::query()
+			->whereIn('user_id', array_map(function (User $user) {
+				return $user->id;
+			}, $users))
+			->groupBy('user_id')
+			->selectRaw('user_id, MIN(created_at) AS first_posted_at')
+			->pluck('first_posted_at', 'user_id')
+			->all();
+
 		foreach ($users as $user) {
-			$user->refreshCommentCount()->refreshDiscussionCount()->save();
+			$user->refreshCommentCount()->refreshDiscussionCount();
+			$first_post_date = isset($first_posted_at[$user->id]) ? Carbon::parse($first_posted_at[$user->id]) : null;
+			if (null !== $first_post_date && (null === $user->joined_at || $first_post_date->lt($user->joined_at))) {
+				$user->joined_at = $first_post_date;
+			}
+			$user->save();
 		}
 	}
 
@@ -759,6 +857,11 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				$discussion->setFirstPost(reset($posts));
 				// Core's own counter definitions, which leave out hidden posts
 				$discussion->refreshLastPost();
+				if (null === $discussion->last_post_id) {
+					// Every post is hidden. Core keeps the last post it had in that case,
+					// so point it at the newest post rather than leaving it empty.
+					$discussion->setLastPost(end($posts));
+				}
 				$discussion->refreshCommentCount();
 				$discussion->refreshParticipantCount();
 				$discussion->save();

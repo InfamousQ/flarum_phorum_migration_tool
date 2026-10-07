@@ -93,6 +93,8 @@ abstract class AbstractPhorumResetCommand extends AbstractCommand {
 	 * still get a chance to fire - and so their own DATA_TYPE_MESSAGE mapping rows (which
 	 * belong to a different step than this one) get cleaned up too, in case this method is
 	 * invoked standalone (phorum:reset:discussions) without deletePosts() having run first.
+	 * Every post in the discussion is deleted, including replies written in Flarum after the
+	 * migration - callers must warn about that.
 	 */
 	protected function deleteDiscussions(array &$counts) {
 		PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)

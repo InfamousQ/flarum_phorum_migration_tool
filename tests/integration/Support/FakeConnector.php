@@ -57,6 +57,17 @@ class FakeConnector extends Connector
         return $this->threadStartingMessages;
     }
 
+    public function hasGuestMessages(): bool
+    {
+        foreach (array_merge($this->threadStartingMessages, $this->getAllThreadMessages()) as $message) {
+            if (isset($message['user_id']) && 0 === (int) $message['user_id']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Flattens the by-thread fixture rows into the shape the real
      * Connector::getAllThreadMessages() returns: every message across every

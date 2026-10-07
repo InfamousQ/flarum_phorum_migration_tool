@@ -40,7 +40,8 @@ class PhorumResetCommand extends AbstractPhorumResetCommand {
 		if (!$this->input->getOption('force') && !$this->confirm(
 			'This will permanently delete all discussions, posts, tags and groups created by '.
 			"the Phorum migration, plus any Flarum users it created (pre-existing Flarum users \n".
-			'that were merely matched by email are left untouched).'
+			"that were merely matched by email are left untouched).\n".
+			'WARNING: replies written in Flarum after the migration inside migrated discussions are deleted too.'
 		)) {
 			$this->output->writeln('Aborted, nothing was deleted.');
 			return 0;

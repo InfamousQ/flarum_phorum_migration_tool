@@ -8,7 +8,8 @@ use Throwable;
 /**
  * Undoes phorum:migrate:discussions: deletes every Flarum discussion phorum:migrate:discussions
  * created, along with every post inside it (and that post's own phorum_mapping bookkeeping,
- * since posts belong to a different migration step than discussions).
+ * since posts belong to a different migration step than discussions). That includes replies
+ * written in Flarum after the migration: they are deleted along with their discussion.
  */
 class PhorumResetDiscussionsCommand extends AbstractPhorumResetCommand {
 
@@ -27,7 +28,8 @@ class PhorumResetDiscussionsCommand extends AbstractPhorumResetCommand {
 
 		if (!$this->input->getOption('force') && !$this->confirm(
 			'This will permanently delete every Flarum discussion created by phorum:migrate:discussions, '.
-			'along with every post inside it.'
+			"along with every post inside it.\n".
+			'WARNING: this includes replies written in Flarum after the migration, not just migrated posts.'
 		)) {
 			$this->output->writeln('Aborted, nothing was deleted.');
 			return 0;
