@@ -61,29 +61,23 @@ class TestablePhorumMigrateCommand extends PhorumMigrateCommand
     }
 
     /**
-     * Mirrors PhorumMigrateCommand::importPhorumMessageForThread(), but preloads/persists
-     * the Phorum-id-to-Flarum-id mapping for just this one thread's messages, so existing
-     * per-thread tests (which exercise one thread at a time against a FakeConnector) don't
-     * need to know about the shared preload/bulk-insert bookkeeping importPhorumMessages()
-     * does across threads in a real run.
+     * Runs PhorumMigrateCommand::importPhorumMessageForThread() for one thread of the
+     * FakeConnector's messages, preloading the shared Phorum-id-to-Flarum-id message
+     * mapping the same way importPhorumMessages() does across threads in a real run.
      */
     public function runImportPhorumMessageForThread(Connector $connector, int $phorumThreadId, $discussionId, array $users): array
     {
         $messages = $connector->getAllThreadMessages();
         $threadMessages = array_values(array_filter($messages, fn ($message) => $message['thread'] == $phorumThreadId));
 
-        $messageIdToPostId = PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
-            ->pluck('flarum_id', 'phorum_id')
-            ->all();
-        $newMappings = [];
+        $messageIdToPostId = $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_MESSAGE, 'posts');
 
-        $posts = $this->importPhorumMessageForThread($phorumThreadId, $discussionId, $users, $threadMessages, $messageIdToPostId, $newMappings);
+        return $this->importPhorumMessageForThread($phorumThreadId, $discussionId, $users, $threadMessages, $messageIdToPostId);
+    }
 
-        if (!empty($newMappings)) {
-            PhorumMapping::insert($newMappings);
-        }
-
-        return $posts;
+    public function runImportPhorumMessages(Connector $connector, array $discussions, array $users): void
+    {
+        $this->importPhorumMessages($connector, $discussions, $users);
     }
 
     /**
