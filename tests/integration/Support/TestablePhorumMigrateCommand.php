@@ -55,7 +55,7 @@ class TestablePhorumMigrateCommand extends PhorumMigrateCommand
         return $this->importPhorumForumsAsTags($connector);
     }
 
-    public function runImportPhorumMessagesAsDiscussions(Connector $connector, array $users, array $tags): array
+    public function runImportPhorumMessagesAsDiscussions(Connector $connector, array &$users, array $tags): array
     {
         return $this->importPhorumMessagesAsDiscussions($connector, $users, $tags);
     }

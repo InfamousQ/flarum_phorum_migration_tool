@@ -16,7 +16,7 @@ Following are migrated:
 In Flarum installation directory, run shell command:
 
 ```
-composer require infamousq/flarum-migration-tool
+composer require infamousq/flarum-phorum-migration-tool
 ```
 
 After extension is downloaded, activate required extensions `Sticky`, `Lock` and `Tags` and this extension `Phorum migration tool`. This can be done via Flarum admin UI or by following commands:
@@ -40,6 +40,22 @@ In Flarum installation directory, run shell command:
 
 Migration takes a while.
 
+Each step can also be run on its own: `phorum:migrate:groups`, `phorum:migrate:users`, `phorum:migrate:user-groups`, `phorum:migrate:tags`, `phorum:migrate:discussions` and `phorum:migrate:posts`, in that order.
+
+## Pre-flight checks
+
+Before `phorum:migrate`, `phorum:migrate:users`, `phorum:migrate:discussions` or `phorum:migrate:posts` writes anything, it runs pre-flight checks against the Phorum data and stops with a list of every problem found. Fix them and run the command again. Currently checked:
+
+* Usernames: a Phorum user whose username and `<username>_migrated` are both already taken in Flarum (or by another Phorum user in the same run). Rename one of the clashing users.
+
+## How data is converted
+
+* Usernames: Phorum display names are converted to valid Flarum usernames (letters, digits, `_` and `-`, 3 to 30 characters), e.g. `Matti Meikäläinen` becomes `Matti_Meikalainen`. A name that is taken gets `_migrated` appended.
+* Users matched by email: a Phorum user whose email already belongs to a Flarum account is merged into that account, and **that Flarum account is renamed to the Phorum user's username**. Resetting the migration does not restore the old username.
+* Join date: a user's join date is set to the date of their first migrated post, when that is earlier.
+* Guest messages: messages from Phorum guests and deleted users are attributed to a single, suspended `Guest` user.
+* Forum permissions: a forum everyone can read and members can fully post in becomes a normal tag. Any other forum, e.g. a read-only announcements forum or a members-only forum, becomes a restricted tag with view, reply and start-discussion permissions per group as in Phorum. Moderator permissions are not migrated.
+
 ## Steps after migration
 
 * Edit user groups, mark those that you wish to hide from public
@@ -55,6 +71,8 @@ To delete everything the migration created, run:
 `php flarum phorum:reset`
 
 The command asks for confirmation first; pass `--force` to skip it. Flarum users that already existed before migration and were matched to Phorum users by email are not deleted.
+
+**Warning:** resetting discussions (`phorum:reset` or `phorum:reset:discussions`) deletes every post inside a migrated discussion, including replies written in Flarum after the migration.
 
 Individual steps can be undone with `phorum:reset:posts`, `phorum:reset:discussions`, `phorum:reset:tags`, `phorum:reset:user-groups`, `phorum:reset:groups` and `phorum:reset:users`. Note that deleting users does not delete their posts or discussions; those are left without an author, so reset posts and discussions first.
 

@@ -132,6 +132,21 @@ class PhorumMigrateUsersCommandTest extends TestCase
     /**
      * @test
      */
+    public function it_converts_the_phorum_display_name_to_a_valid_flarum_username()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Matti Meikäläinen', 'real_name' => '', 'email' => 'matti@example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $this->assertSame('Matti_Meikalainen', $users[1]->username);
+    }
+
+    /**
+     * @test
+     */
     public function it_throws_when_both_the_desired_and_migrated_usernames_are_already_taken()
     {
         User::register('docker', 'docker@localhost', 'password')->save();

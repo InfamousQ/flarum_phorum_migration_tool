@@ -35,6 +35,10 @@ class PhorumMigratePostsCommand extends AbstractPhorumMigrateCommand {
 		}
 
 		$connector = $this->buildConnector();
+		// The guest placeholder user may be created in this step
+		if (!$this->runPreflightChecks($connector)) {
+			return 1;
+		}
 		$this->importPhorumMessages($connector, $discussions, $users);
 
 		$this->output->writeln('Done.');

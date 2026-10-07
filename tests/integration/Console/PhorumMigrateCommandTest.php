@@ -9,6 +9,7 @@ use Flarum\Post\Post;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\Tag;
 use Flarum\User\User;
+use InfamousQ\FlarumPhorumMigrationTool\Console\AbstractPhorumMigrateCommand;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\FakeConnector;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\RecordingLogger;
@@ -342,6 +343,28 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
+    public function it_restricts_a_public_read_only_phorum_forum_while_keeping_it_readable_by_everyone()
+    {
+        $connector = new FakeConnector();
+        $connector->forums = [
+            // Everyone can read, registered users can only reply
+            ['forum_id' => 10, 'name' => 'Announcements', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 3],
+        ];
+
+        $tags = $this->command()->runImportPhorumForumsAsTags($connector);
+        $tagId = $tags[10]->id;
+
+        $this->assertTrue((bool) $tags[10]->is_restricted);
+        $guestPerms = Permission::query()->where('group_id', Group::GUEST_ID)->where('permission', 'like', "tag{$tagId}.%")->pluck('permission')->all();
+        $this->assertSame(["tag{$tagId}.viewForum"], $guestPerms);
+        $memberPerms = Permission::query()->where('group_id', Group::MEMBER_ID)->pluck('permission')->all();
+        $this->assertContains("tag{$tagId}.discussion.reply", $memberPerms);
+        $this->assertNotContains("tag{$tagId}.startDiscussion", $memberPerms);
+    }
+
+    /**
+     * @test
+     */
     public function it_restricts_a_registered_only_phorum_forum_to_members()
     {
         $connector = new FakeConnector();
@@ -481,6 +504,83 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
+    public function it_skips_a_thread_starting_message_without_a_user_id_instead_of_attributing_it_to_the_guest()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
+
+        $connector->threadStartingMessages = [
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => null, 'subject' => 'No author', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => '', 'subject' => 'Empty author', 'status' => 2, 'sort' => 0, 'closed' => 0],
+        ];
+
+        $logger = new RecordingLogger();
+        $command->setLogger($logger);
+
+        $discussions = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
+
+        $this->assertSame([], $discussions);
+        $this->assertTrue($logger->hasRecordMatching('critical', 'Unknown Phorum user id'));
+        $this->assertSame(0, User::query()->where('email', AbstractPhorumMigrateCommand::GUEST_EMAIL)->count());
+    }
+
+    /**
+     * @test
+     */
+    public function it_hands_the_guest_placeholder_back_and_counts_its_discussions()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
+
+        $connector->threadStartingMessages = [
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 0, 'subject' => 'Guest thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+        ];
+
+        $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
+
+        $this->assertArrayHasKey(AbstractPhorumMigrateCommand::PHORUM_GUEST_USER_ID, $users);
+        $guest = User::find($users[AbstractPhorumMigrateCommand::PHORUM_GUEST_USER_ID]->id);
+        $this->assertSame(AbstractPhorumMigrateCommand::GUEST_EMAIL, $guest->email);
+        $this->assertSame(1, $guest->discussion_count);
+    }
+
+    /**
+     * @test
+     */
+    public function it_rolls_back_a_discussion_chunk_whose_mapping_rows_fail_to_save()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
+
+        $connector->threadStartingMessages = [
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+        ];
+
+        $failing = new class($this->app()->getContainer()->make(SettingsRepositoryInterface::class)) extends TestablePhorumMigrateCommand {
+            protected function insertPendingDiscussions(array $chunk, array &$discussions)
+            {
+                parent::insertPendingDiscussions($chunk, $discussions);
+                throw new \RuntimeException('Simulated failure');
+            }
+        };
+
+        try {
+            $failing->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
+            $this->fail('Expected the simulated failure to propagate');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Simulated failure', $e->getMessage());
+        }
+
+        $this->assertSame(0, Discussion::query()->count());
+        $this->assertSame(0, PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_DISCUSSION)->count());
+    }
+
+    /**
+     * @test
+     */
     public function it_reuses_the_existing_mapped_discussion_on_a_second_run()
     {
         $connector = new FakeConnector();
@@ -562,6 +662,27 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
+    public function it_sets_the_last_post_even_when_every_post_in_the_thread_is_hidden()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $discussions] = $this->fixtureDiscussion($connector, $command);
+
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'On hold post', 'datestamp' => 1600000000, 'status' => -1],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Moderator hidden post', 'datestamp' => 1600003600, 'status' => -2],
+        ];
+
+        $posts = $command->runImportPhorumMessageForThread($connector, 100, $discussions[100], $users);
+
+        $discussion = Discussion::find($discussions[100]);
+        $this->assertSame($posts[1]->id, $discussion->last_post_id);
+        $this->assertSame(1600003600, $discussion->last_posted_at->getTimestamp());
+    }
+
+    /**
+     * @test
+     */
     public function it_does_not_hide_posts_just_because_their_phorum_thread_is_closed()
     {
         $connector = new FakeConnector();
@@ -630,6 +751,25 @@ class PhorumMigrateCommandTest extends TestCase
 
         $this->assertSame([], $posts);
         $this->assertTrue($logger->hasRecordMatching('critical', 'Post linked to wrong Discussion'));
+    }
+
+    /**
+     * @test
+     */
+    public function it_moves_a_users_join_date_back_to_their_first_post()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $discussions] = $this->fixtureDiscussion($connector, $command);
+
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'status' => 2],
+        ];
+
+        $command->runImportPhorumMessages($connector, $discussions, $users);
+
+        $this->assertSame(1600000000, User::find($users[1]->id)->joined_at->getTimestamp());
     }
 
     // --- Full pipeline -------------------------------------------------------

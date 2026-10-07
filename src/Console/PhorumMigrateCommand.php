@@ -21,6 +21,9 @@ class PhorumMigrateCommand extends AbstractPhorumMigrateCommand {
 	protected function fire() {
 		$this->setUpLogger();
 		$connector = $this->buildConnector();
+		if (!$this->runPreflightChecks($connector)) {
+			return 1;
+		}
 
 		$p_user_groups = $this->importUserGroups($connector);
 		$p_users = $this->importUsers($connector);

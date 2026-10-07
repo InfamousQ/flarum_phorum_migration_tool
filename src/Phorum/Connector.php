@@ -100,6 +100,18 @@ class Connector {
 	}
 
 	/**
+	 * Whether any message was posted by a guest (or a since deleted user), i.e. has user_id 0.
+	 */
+	public function hasGuestMessages() : bool {
+		try {
+			$p_guest_query = "SELECT 1 FROM {$this->table_prefix}messages WHERE user_id = 0 LIMIT 1";
+			return false !== $this->pdo->query($p_guest_query)->fetchColumn();
+		} catch (\PDOException $pdo_exception) {
+			throw new ConnectorException('Could not query guest messages from Phorum', 1, $pdo_exception);
+		}
+	}
+
+	/**
 	 * Fetch every reply/thread message across all threads in a single query,
 	 * ordered so that callers can bucket rows by `thread` and rely on
 	 * message order within each bucket for first/last post detection.
