@@ -48,9 +48,17 @@ Migration takes a while.
 
 # Undoing migration
 
-Warning: Any migrated content is deleted when undoing migration! This includes user groups and users!
+Warning: Undoing migration permanently deletes migrated content! This includes user groups and users!
 
-TODO!
+To delete everything the migration created, run:
+
+`php flarum phorum:reset`
+
+The command asks for confirmation first; pass `--force` to skip it. Flarum users that already existed before migration and were matched to Phorum users by email are not deleted.
+
+Individual steps can be undone with `phorum:reset:posts`, `phorum:reset:discussions`, `phorum:reset:tags`, `phorum:reset:user-groups`, `phorum:reset:groups` and `phorum:reset:users`. Note that deleting users does not delete their posts or discussions; those are left without an author, so reset posts and discussions first.
+
+Uninstalling or purging this extension does not undo migration. It only removes the extension's own bookkeeping table, and all migrated content stays in Flarum. Run `phorum:reset` before uninstalling if you want the migrated content removed, because the reset commands rely on that table.
 
 # Testing
 
