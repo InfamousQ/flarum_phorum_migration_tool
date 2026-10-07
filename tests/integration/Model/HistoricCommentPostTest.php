@@ -30,4 +30,24 @@ class HistoricCommentPostTest extends TestCase
         $this->assertSame($user->id, $post->user_id);
         $this->assertSame('127.0.0.1', $post->ip_address);
     }
+
+    /**
+     * @test
+     */
+    public function it_does_not_load_the_author_again_when_given_one()
+    {
+        $user = User::register('Alice', 'alice@example.com', 'password');
+        $user->save();
+        $discussion = Discussion::start('Test discussion', $user);
+        $discussion->save();
+
+        $queries = [];
+        $this->database()->listen(function ($query) use (&$queries) {
+            $queries[] = $query->sql;
+        });
+
+        HistoricCommentPost::replyAtTime($discussion->id, 'Historic content', $user->id, '127.0.0.1', 1600000000, $user)->save();
+
+        $this->assertSame([], array_values(array_filter($queries, fn ($sql) => str_contains($sql, '_users`'))));
+    }
 }

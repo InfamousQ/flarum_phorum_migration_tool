@@ -9,7 +9,6 @@ use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Log\ConsoleLogger;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
-use Psr\Log\NullLogger;
 
 class PhorumViewCommand extends AbstractCommand implements LoggerAwareInterface {
 
@@ -31,10 +30,7 @@ class PhorumViewCommand extends AbstractCommand implements LoggerAwareInterface 
 
 	protected function fire() {
 
-		$this->setLogger(new NullLogger());
-		if ($this->output->isVerbose()) {
-			$this->setLogger(new ConsoleLogger());
-		}
+		$this->setLogger(new ConsoleLogger($this->output));
 
 		$phorum_db_host = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_host');
 		$phorum_db_name = $this->settings->get('infamousq-phorum-migration-tool.phorum_db_name');

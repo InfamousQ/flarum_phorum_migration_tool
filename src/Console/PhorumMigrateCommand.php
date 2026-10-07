@@ -2,6 +2,9 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
+use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\AutoIncrementCheck;
+
 /**
  * Runs the full Phorum-to-Flarum migration pipeline in one shot: groups, users,
  * user-to-group assignment, tags, discussions, then posts, in that order. Each
@@ -16,6 +19,11 @@ class PhorumMigrateCommand extends AbstractPhorumMigrateCommand {
 		$this
 			->setName('phorum:migrate')
 			->setDescription('Migrate data from existing Phorum installation (runs every step - see also the individual phorum:migrate:* commands)');
+	}
+
+	protected function preflightChecks() : array {
+		// This step bulk-inserts discussions
+		return array_merge(parent::preflightChecks(), [new AutoIncrementCheck(PhorumMapping::query()->getConnection())]);
 	}
 
 	protected function fire() {

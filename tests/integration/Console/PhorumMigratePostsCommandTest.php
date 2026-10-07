@@ -60,7 +60,7 @@ class PhorumMigratePostsCommandTest extends TestCase
             ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $this->usersCommand()->runStep($connector);
@@ -160,6 +160,48 @@ class PhorumMigratePostsCommandTest extends TestCase
     }
 
     /**
+     * @test
+     */
+    public function it_leaves_a_thread_with_nothing_new_alone_on_a_re_run()
+    {
+        $connector = new FakeConnector();
+        $discussions = $this->fixtureDiscussion($connector);
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First', 'datestamp' => 1600000000, 'status' => 2],
+        ];
+        $this->command()->runStep($connector);
+
+        // A marker the import would overwrite if it processed the thread again
+        Discussion::query()->where('id', $discussions[100])->update(['comment_count' => 99]);
+        $this->command()->runStep($connector);
+        $this->assertSame(99, Discussion::find($discussions[100])->comment_count);
+
+        $connector->threadMessages[100][] = ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second', 'datestamp' => 1600003600, 'status' => 2];
+        $this->command()->runStep($connector);
+        $this->assertSame(2, Discussion::find($discussions[100])->comment_count);
+    }
+
+    /**
+     * @test
+     */
+    public function it_hides_an_already_migrated_post_on_a_re_run_once_its_phorum_message_is_hidden()
+    {
+        $connector = new FakeConnector();
+        $this->fixtureDiscussion($connector);
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second', 'datestamp' => 1600003600, 'status' => 2],
+        ];
+        $this->command()->runStep($connector);
+
+        $connector->threadMessages[100][1]['status'] = -2;
+        $this->command()->runStep($connector);
+
+        $postId = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, 1001);
+        $this->assertNotNull(Post::find($postId)->hidden_at);
+    }
+
+    /**
      * Posts/discussions are bulk-inserted via plain ->save() calls, which
      * bypasses Flarum's command bus - so the Posted/Started events that
      * normally keep users.comment_count/discussion_count in sync never fire.
@@ -224,7 +266,7 @@ class PhorumMigratePostsCommandTest extends TestCase
             ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
         ];
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 0, 'subject' => 'Guest thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 0, 'subject' => 'Guest thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
         $connector->threadMessages[100] = [
             ['message_id' => 1000, 'user_id' => 0, 'body' => 'Guest post', 'datestamp' => 1600000000, 'status' => 2],

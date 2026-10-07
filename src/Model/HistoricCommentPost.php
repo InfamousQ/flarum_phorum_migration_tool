@@ -3,6 +3,7 @@
 namespace InfamousQ\FlarumPhorumMigrationTool\Model;
 
 use Carbon\Carbon;
+use Flarum\User\User;
 
 /**
  * HistoricCommentPost
@@ -18,14 +19,19 @@ class HistoricCommentPost extends \Flarum\Post\CommentPost {
 	* @param int $userId
 	* @param string $ipAddress
 	* @param string $timestamp Unix timestamp
+	* @param User|null $author The user $userId refers to, if at hand. Saves a query
+	*   per post, since parsing the content otherwise loads the author.
 	* @return HistoricCommentPost
 	*/
-	public static function replyAtTime($discussionId, $content, $userId, $ipAddress, $timestamp) {
+	public static function replyAtTime($discussionId, $content, $userId, $ipAddress, $timestamp, ?User $author = null) {
 		$post = new static;
 
 		$post->created_at = Carbon::createFromTimestamp($timestamp);
 		$post->discussion_id = $discussionId;
 		$post->user_id = $userId;
+		if (null !== $author) {
+			$post->setRelation('user', $author);
+		}
 		$post->type = static::$type;
 		$post->ip_address = $ipAddress;
 

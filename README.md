@@ -44,9 +44,10 @@ Each step can also be run on its own: `phorum:migrate:groups`, `phorum:migrate:u
 
 ## Pre-flight checks
 
-Before `phorum:migrate`, `phorum:migrate:users`, `phorum:migrate:discussions` or `phorum:migrate:posts` writes anything, it runs pre-flight checks against the Phorum data and stops with a list of every problem found. Fix them and run the command again. Currently checked:
+Before `phorum:migrate`, `phorum:migrate:users`, `phorum:migrate:discussions` or `phorum:migrate:posts` writes anything, it runs pre-flight checks against the Phorum data and the Flarum database, and stops with a list of every problem found. Fix them and run the command again. Currently checked:
 
 * Usernames: a Phorum user whose username and `<username>_migrated` are both already taken in Flarum (or by another Phorum user in the same run). Rename one of the clashing users.
+* Auto-increment step (`phorum:migrate` and `phorum:migrate:discussions` only): the Flarum database must have `auto_increment_increment = 1`, since discussions are bulk-inserted and their ids derived from the first one. Galera / MariaDB Cluster and multi-primary replication often use a larger step; set it to 1 while migrating (on Galera, also turn `wsrep_auto_increment_control` off and migrate against a single node).
 
 ## How data is converted
 
@@ -100,6 +101,14 @@ docker compose run --rm php composer test
 ```
 
 If you have PHP and Composer installed locally instead, the same `composer test`, `composer test:unit`, `composer test:integration` and `composer test:setup` scripts work directly. (If your Docker install doesn't have the `docker compose` plugin, use the standalone `docker-compose` binary instead — same commands.)
+
+## Benchmark
+
+`composer benchmark` migrates a synthetic Phorum forum in the integration test database twice (a first run, then a re-run with nothing new) and prints wall time, query count and peak memory for each step. It needs `composer test:setup` to have run, and isn't part of `composer test`. Size the forum with environment variables (defaults shown):
+
+```
+docker compose run --rm -e BENCH_USERS=1000 -e BENCH_THREADS=2000 -e BENCH_MESSAGES_PER_THREAD=10 php composer benchmark
+```
 
 ## Continuous integration
 

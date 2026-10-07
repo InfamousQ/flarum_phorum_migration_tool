@@ -35,6 +35,11 @@ class TestablePhorumMigrateCommand extends PhorumMigrateCommand
         $this->setLogger(new NullLogger());
     }
 
+    public function runLoadUserMap(): array
+    {
+        return $this->loadUserMap();
+    }
+
     public function runImportUserGroups(Connector $connector): array
     {
         return $this->importUserGroups($connector);

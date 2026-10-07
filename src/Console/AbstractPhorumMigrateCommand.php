@@ -22,7 +22,6 @@ use Carbon\Carbon;
 use Illuminate\Support\Str;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
-use Psr\Log\NullLogger;
 
 /**
  * Shared plumbing for `phorum:migrate` (the full-pipeline command) and the six
@@ -45,6 +44,11 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	const PHORUM_ALLOW_NEW_TOPIC = 8;
 	/** Members can read, reply and start threads: the only forum a Flarum tag can model without being restricted */
 	const PHORUM_ALLOW_OPEN = self::PHORUM_ALLOW_READ | self::PHORUM_ALLOW_REPLY | self::PHORUM_ALLOW_NEW_TOPIC;
+
+	/** Phorum's PHORUM_SORT_* values for a thread starting message (include/constants.php). Both become sticky discussions. */
+	const PHORUM_SORT_ANNOUNCEMENT = 0;
+	const PHORUM_SORT_STICKY = 1;
+	const PHORUM_SORT_DEFAULT = 2;
 
 	/** Phorum's PHORUM_USER_ACTIVE (include/api/user.php). Anything else is inactive or pending. */
 	const PHORUM_USER_ACTIVE = 1;
@@ -76,10 +80,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	}
 
 	protected function setUpLogger() {
-		$this->setLogger(new NullLogger());
-		if ($this->output->isVerbose()) {
-			$this->setLogger(new ConsoleLogger());
-		}
+		$this->setLogger(new ConsoleLogger($this->output));
 	}
 
 	/**
@@ -138,11 +139,20 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * @return array Keyed by phorum_id
 	 */
 	protected function loadModelMap(int $data_type, string $model_class) : array {
+		$flarum_ids = PhorumMapping::where('phorum_data_type', $data_type)->pluck('flarum_id', 'phorum_id')->all();
+
+		$models = [];
+		// Chunked to stay well below MySQL's limit of 65535 placeholders per statement
+		foreach (array_chunk(array_unique(array_filter($flarum_ids)), 10000) as $chunk) {
+			foreach ($model_class::whereIn('id', $chunk)->get() as $model) {
+				$models[$model->id] = $model;
+			}
+		}
+
 		$map = [];
-		foreach (PhorumMapping::where('phorum_data_type', $data_type)->get() as $mapping) {
-			$model = $model_class::find($mapping->flarum_id);
-			if (null !== $model) {
-				$map[$mapping->phorum_id] = $model;
+		foreach ($flarum_ids as $phorum_id => $flarum_id) {
+			if (isset($models[$flarum_id])) {
+				$map[$phorum_id] = $models[$flarum_id];
 			}
 		}
 
@@ -599,8 +609,9 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			 * -2 = PHORUM_STATUS_HIDDEN
 			 */
 			$p_status_int = (int) ($p_msg['status'] ?? 2);
-			// Phorum thread is sticky if it's starting message is marked to have own special sort value
-			$p_message_is_sticky = $p_msg['sort'] == 1;
+			// Phorum keeps announcements and sticky threads above the rest, Flarum only has sticky
+			$p_sort = (int) ($p_msg['sort'] ?? self::PHORUM_SORT_DEFAULT);
+			$p_message_is_sticky = in_array($p_sort, [self::PHORUM_SORT_ANNOUNCEMENT, self::PHORUM_SORT_STICKY], true);
 			// Phorum thread is locked if it's starting message is marked to have 'closed' attribute
 			$p_message_is_locked = $p_msg['closed'] == 1;
 			$author_user = $this->resolveAuthor($p_user_id, $users);
@@ -658,6 +669,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		foreach ($new_discussion_authors as $author_user) {
 			$author_user->refreshDiscussionCount()->save();
 		}
+		$this->refreshTagCounters();
 
 		return $discussions;
 	}
@@ -712,35 +724,101 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	}
 
 	/**
-	 * Import every reply for every thread. Messages are fetched from Phorum
-	 * in a single bulk query and grouped by thread in memory, and the
-	 * Phorum-id-to-Flarum-id mapping table is preloaded once and batch-inserted
-	 * per thread, instead of once per message, to avoid tens of thousands of
-	 * per-post round trips.
+	 * Import every reply for every thread. Messages are streamed from Phorum in
+	 * a single query and handled one thread at a time, so only one thread's
+	 * messages are held in memory. The Phorum-id-to-Flarum-id mapping table is
+	 * preloaded once and batch-inserted per thread, instead of once per message,
+	 * to avoid tens of thousands of per-post round trips. Threads with nothing
+	 * left to do are skipped, which keeps re-runs cheap.
 	 *
 	 * @param Connector $connector
 	 * @param array $p_discussions Discussion id keyed by Phorum thread id
 	 * @param User[] $users
 	 */
 	protected function importPhorumMessages(Connector $connector, array $p_discussions, array $users) {
-		$p_messages_by_thread = [];
-		foreach ($connector->getAllThreadMessages() as $p_msg) {
-			$p_messages_by_thread[$p_msg['thread']][] = $p_msg;
-		}
-
 		$message_id_to_post_id = $this->loadLiveIdMap(PhorumMapping::DATA_TYPE_MESSAGE, 'posts');
+		$hidden_post_ids = array_flip(Post::query()->whereNotNull('hidden_at')->pluck('id')->all());
 
-		foreach ($p_discussions as $p_thread_id => $discussion_id) {
+		foreach ($this->groupMessagesByThread($connector->getAllThreadMessages()) as $p_thread_id => $p_thread_messages) {
+			$discussion_id = $p_discussions[$p_thread_id] ?? null;
+			if (null === $discussion_id || !$this->threadNeedsImport($p_thread_messages, $message_id_to_post_id, $hidden_post_ids)) {
+				continue;
+			}
 			$this->importPhorumMessageForThread(
 				$p_thread_id,
 				$discussion_id,
 				$users,
-				$p_messages_by_thread[$p_thread_id] ?? [],
+				$p_thread_messages,
 				$message_id_to_post_id
 			);
 		}
 
 		$this->refreshUserPostCounts($users);
+		// The last posted discussion depends on the posts imported above
+		$this->refreshTagCounters();
+	}
+
+	/**
+	 * Bulk-inserted discussions and directly saved posts also bypass the events
+	 * flarum/tags uses to keep tags.discussion_count and the last posted discussion
+	 * in sync. Recompute both for every migrated tag, counting what flarum/tags
+	 * counts: discussions that are neither private nor hidden.
+	 */
+	protected function refreshTagCounters() {
+		foreach ($this->loadTagMap() as $tag) {
+			$tag->discussion_count = $tag->discussions()
+				->where('is_private', false)
+				->whereNull('hidden_at')
+				->count();
+			$tag->refreshLastPostedDiscussion();
+			$tag->save();
+		}
+	}
+
+	/**
+	 * Group messages ordered by thread (see Connector::getAllThreadMessages()) into
+	 * one batch per thread, reading no further ahead than the thread at hand.
+	 *
+	 * @param iterable $p_messages
+	 * @return \Generator Phorum thread id => that thread's messages, in order
+	 */
+	protected function groupMessagesByThread(iterable $p_messages) : \Generator {
+		$p_thread_id = null;
+		$p_thread_messages = [];
+		foreach ($p_messages as $p_msg) {
+			if (!empty($p_thread_messages) && $p_msg['thread'] != $p_thread_id) {
+				yield $p_thread_id => $p_thread_messages;
+				$p_thread_messages = [];
+			}
+			$p_thread_id = $p_msg['thread'];
+			$p_thread_messages[] = $p_msg;
+		}
+		if (!empty($p_thread_messages)) {
+			yield $p_thread_id => $p_thread_messages;
+		}
+	}
+
+	/**
+	 * Whether importPhorumMessageForThread() would change anything for this thread:
+	 * a message has no post yet, or a message that isn't approved in Phorum has a
+	 * post that isn't hidden yet.
+	 *
+	 * @param array $p_thread_messages
+	 * @param int[] $message_id_to_post_id Phorum message id => Flarum post id
+	 * @param array $hidden_post_ids Flarum post id => anything, for every hidden post
+	 */
+	protected function threadNeedsImport(array $p_thread_messages, array $message_id_to_post_id, array $hidden_post_ids) : bool {
+		foreach ($p_thread_messages as $p_msg) {
+			$post_id = $message_id_to_post_id[$p_msg['message_id'] ?? null] ?? null;
+			if (null === $post_id) {
+				return true;
+			}
+			if ((int) ($p_msg['status'] ?? 2) < 2 && !isset($hidden_post_ids[$post_id])) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -819,7 +897,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				$post_id = $message_id_to_post_id[$p_message_id] ?? null;
 				/** @var \Flarum\Post\CommentPost $post */
 				if (null === $post_id) {
-					$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created);
+					$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created, $author_user);
 					$post->save();
 					$message_id_to_post_id[$p_message_id] = $post->id;
 					$new_mappings[] = [
