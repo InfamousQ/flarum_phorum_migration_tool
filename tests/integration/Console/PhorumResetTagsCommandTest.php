@@ -64,7 +64,7 @@ class PhorumResetTagsCommandTest extends TestCase
         ];
         $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15]];
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
         $this->usersCommand()->runStep($connector);
         $tags = $this->tagsCommand()->runStep($connector);

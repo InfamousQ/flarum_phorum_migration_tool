@@ -2,6 +2,9 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
+use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\AutoIncrementCheck;
+
 /**
  * Step 5 of the migration pipeline: create a Flarum discussion for each Phorum
  * thread's starting message. Requires phorum:migrate:users and
@@ -17,6 +20,11 @@ class PhorumMigrateDiscussionsCommand extends AbstractPhorumMigrateCommand {
 		$this
 			->setName('phorum:migrate:discussions')
 			->setDescription('Migrate step 5/6: create discussions from Phorum thread starting messages (requires phorum:migrate:users and phorum:migrate:tags to have run first)');
+	}
+
+	protected function preflightChecks() : array {
+		// This step bulk-inserts discussions
+		return array_merge(parent::preflightChecks(), [new AutoIncrementCheck(PhorumMapping::query()->getConnection())]);
 	}
 
 	protected function fire() {

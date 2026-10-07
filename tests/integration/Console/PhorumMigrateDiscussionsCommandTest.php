@@ -61,7 +61,7 @@ class PhorumMigrateDiscussionsCommandTest extends TestCase
             // sticky, approved (visible), not locked
             ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Sticky thread', 'status' => 2, 'sort' => 1, 'closed' => 0],
             // not sticky, on hold (hidden), locked
-            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Hidden locked thread', 'status' => -1, 'sort' => 0, 'closed' => 1],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Hidden locked thread', 'status' => -1, 'sort' => 2, 'closed' => 1],
         ];
 
         // Step under test again loads its prerequisites (users/tags) from
@@ -88,8 +88,8 @@ class PhorumMigrateDiscussionsCommandTest extends TestCase
         $this->fixtureUsersAndTags($connector);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 999, 'subject' => 'Unknown author', 'status' => 2, 'sort' => 0, 'closed' => 0],
-            ['forum_id' => 999, 'thread' => 101, 'user_id' => 1, 'subject' => 'Unknown forum', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 999, 'subject' => 'Unknown author', 'status' => 2, 'sort' => 2, 'closed' => 0],
+            ['forum_id' => 999, 'thread' => 101, 'user_id' => 1, 'subject' => 'Unknown forum', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $command = $this->command();
@@ -112,7 +112,7 @@ class PhorumMigrateDiscussionsCommandTest extends TestCase
         $this->fixtureUsersAndTags($connector);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $first = $this->command()->runStep($connector);
@@ -131,11 +131,11 @@ class PhorumMigrateDiscussionsCommandTest extends TestCase
         $this->fixtureUsersAndTags($connector);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread one', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread one', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
         $first = $this->command()->runStep($connector);
 
-        $connector->threadStartingMessages[] = ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Thread two', 'status' => 2, 'sort' => 0, 'closed' => 0];
+        $connector->threadStartingMessages[] = ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Thread two', 'status' => 2, 'sort' => 2, 'closed' => 0];
         $second = $this->command()->runStep($connector);
 
         $this->assertSame($first[100], $second[100]);

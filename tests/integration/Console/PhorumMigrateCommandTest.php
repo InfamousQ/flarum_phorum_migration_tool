@@ -12,6 +12,7 @@ use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Console\AbstractPhorumMigrateCommand;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\FakeConnector;
+use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\PhorumDatabase;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\RecordingLogger;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Support\TestablePhorumMigrateCommand;
 use InfamousQ\FlarumPhorumMigrationTool\Tests\integration\TestCase;
@@ -229,6 +230,29 @@ class PhorumMigrateCommandTest extends TestCase
     }
 
     // --- importUserGroupMapping ---------------------------------------------
+
+    /**
+     * @test
+     */
+    public function loading_the_user_map_skips_deleted_users_and_keeps_merged_ones()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
+            // Same email as Alice, so merged into her account
+            ['user_id' => 2, 'display_name' => 'Alice2', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
+            ['user_id' => 3, 'display_name' => 'Bob', 'real_name' => '', 'email' => 'bob@example.com', 'active' => 1, 'admin' => 0],
+        ];
+        $command = $this->command();
+        $imported = $command->runImportUsers($connector);
+        $imported[3]->delete();
+
+        $map = $command->runLoadUserMap();
+
+        $this->assertSame([1, 2], array_keys($map));
+        $this->assertSame($imported[1]->id, $map[1]->id);
+        $this->assertSame($imported[1]->id, $map[2]->id);
+    }
 
     /**
      * @test
@@ -461,7 +485,7 @@ class PhorumMigrateCommandTest extends TestCase
             // sticky, approved (visible), not locked
             ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Sticky thread', 'status' => 2, 'sort' => 1, 'closed' => 0],
             // not sticky, on hold (hidden), locked
-            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Hidden locked thread', 'status' => -1, 'sort' => 0, 'closed' => 1],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Hidden locked thread', 'status' => -1, 'sort' => 2, 'closed' => 1],
         ];
 
         $discussions = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
@@ -480,6 +504,26 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
+    public function it_makes_phorum_announcements_sticky()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
+
+        $connector->threadStartingMessages = [
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Announcement', 'status' => 2, 'sort' => AbstractPhorumMigrateCommand::PHORUM_SORT_ANNOUNCEMENT, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Normal thread', 'status' => 2, 'sort' => AbstractPhorumMigrateCommand::PHORUM_SORT_DEFAULT, 'closed' => 0],
+        ];
+
+        $discussions = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
+
+        $this->assertTrue((bool) Discussion::find($discussions[100])->is_sticky);
+        $this->assertFalse((bool) Discussion::find($discussions[101])->is_sticky);
+    }
+
+    /**
+     * @test
+     */
     public function it_skips_thread_starting_messages_with_unknown_author_or_forum()
     {
         $connector = new FakeConnector();
@@ -487,8 +531,8 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 999, 'subject' => 'Unknown author', 'status' => 2, 'sort' => 0, 'closed' => 0],
-            ['forum_id' => 999, 'thread' => 101, 'user_id' => 1, 'subject' => 'Unknown forum', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 999, 'subject' => 'Unknown author', 'status' => 2, 'sort' => 2, 'closed' => 0],
+            ['forum_id' => 999, 'thread' => 101, 'user_id' => 1, 'subject' => 'Unknown forum', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $logger = new RecordingLogger();
@@ -511,8 +555,8 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => null, 'subject' => 'No author', 'status' => 2, 'sort' => 0, 'closed' => 0],
-            ['forum_id' => 10, 'thread' => 101, 'user_id' => '', 'subject' => 'Empty author', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => null, 'subject' => 'No author', 'status' => 2, 'sort' => 2, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => '', 'subject' => 'Empty author', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $logger = new RecordingLogger();
@@ -535,7 +579,7 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 0, 'subject' => 'Guest thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 0, 'subject' => 'Guest thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
@@ -556,7 +600,7 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $failing = new class($this->app()->getContainer()->make(SettingsRepositoryInterface::class)) extends TestablePhorumMigrateCommand {
@@ -588,7 +632,7 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
 
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
 
         $first = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
@@ -604,7 +648,7 @@ class PhorumMigrateCommandTest extends TestCase
     {
         [$users, $tags] = $this->fixtureUsersAndTags($connector, $command);
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
         $discussions = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
 
@@ -730,7 +774,7 @@ class PhorumMigrateCommandTest extends TestCase
         [$users, $discussions] = $this->fixtureDiscussion($connector, $command);
 
         // Create a second, unrelated discussion/thread and map message 1000 to it.
-        $connector->threadStartingMessages[] = ['forum_id' => 10, 'thread' => 200, 'user_id' => 1, 'subject' => 'Other thread', 'status' => 2, 'sort' => 0, 'closed' => 0];
+        $connector->threadStartingMessages[] = ['forum_id' => 10, 'thread' => 200, 'user_id' => 1, 'subject' => 'Other thread', 'status' => 2, 'sort' => 2, 'closed' => 0];
         [$_, $tagsUnused] = [null, null];
         $tags = $command->runImportPhorumForumsAsTags($connector);
         $otherDiscussions = $command->runImportPhorumMessagesAsDiscussions($connector, $users, $tags);
@@ -777,6 +821,81 @@ class PhorumMigrateCommandTest extends TestCase
     /**
      * @test
      */
+    public function full_migration_reads_messages_streamed_from_a_real_phorum_database()
+    {
+        $phorum = new PhorumDatabase();
+        $phorum->createTables();
+        try {
+            $phorum->insert('users', ['user_id' => 1, 'display_name' => 'Alice', 'email' => 'alice@example.com']);
+            $phorum->insert('forums', ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'pub_perms' => 1, 'reg_perms' => 15]);
+            // Messages of the two threads interleave in time, so only ORDER BY thread groups them
+            $phorum->insertMany('messages', [
+                ['message_id' => 1, 'forum_id' => 10, 'thread' => 1, 'parent_id' => 0, 'user_id' => 1, 'subject' => 'One', 'body' => 'One 1', 'datestamp' => 100],
+                ['message_id' => 2, 'forum_id' => 10, 'thread' => 2, 'parent_id' => 0, 'user_id' => 1, 'subject' => 'Two', 'body' => 'Two 1', 'datestamp' => 200],
+                ['message_id' => 3, 'forum_id' => 10, 'thread' => 1, 'parent_id' => 1, 'user_id' => 1, 'subject' => 'Re', 'body' => 'One 2', 'datestamp' => 300],
+                ['message_id' => 4, 'forum_id' => 10, 'thread' => 2, 'parent_id' => 2, 'user_id' => 1, 'subject' => 'Re', 'body' => 'Two 2', 'datestamp' => 400],
+            ]);
+
+            $this->command()->runFullMigration($phorum->connector());
+        } finally {
+            $phorum->dropTables();
+        }
+
+        foreach ([1 => [1, 3], 2 => [2, 4]] as $thread => $messageIds) {
+            $discussion = Discussion::find(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, $thread));
+            $postIds = array_map(fn ($id) => PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, $id), $messageIds);
+            $this->assertSame($postIds, $discussion->posts()->orderBy('number')->pluck('id')->all());
+            $this->assertSame(2, $discussion->comment_count);
+        }
+    }
+
+    /**
+     * @test
+     */
+    public function full_migration_sets_tag_discussion_counts_and_last_posted_discussion()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0],
+        ];
+        $connector->forums = [
+            ['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15],
+            ['forum_id' => 11, 'name' => 'Phorum Empty', 'description' => '', 'parent_id' => 0, 'display_order' => 2, 'pub_perms' => 1, 'reg_perms' => 15],
+        ];
+        $connector->threadStartingMessages = [
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Older', 'status' => 2, 'sort' => 2, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 101, 'user_id' => 1, 'subject' => 'Newer', 'status' => 2, 'sort' => 2, 'closed' => 0],
+            // Hidden discussions are not counted, nor can they be the last posted one
+            ['forum_id' => 10, 'thread' => 102, 'user_id' => 1, 'subject' => 'Hidden', 'status' => -2, 'sort' => 2, 'closed' => 0],
+        ];
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600000000, 'status' => 2],
+        ];
+        $connector->threadMessages[101] = [
+            ['message_id' => 1010, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600001000, 'status' => 2],
+        ];
+        $connector->threadMessages[102] = [
+            ['message_id' => 1020, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600002000, 'status' => -2],
+        ];
+
+        $this->command()->runFullMigration($connector);
+
+        $tagId = PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, 10);
+        $tag = Tag::find($tagId);
+        $newer = Discussion::find(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_DISCUSSION, 101));
+        $this->assertSame(2, (int) $tag->discussion_count);
+        $this->assertSame($newer->id, (int) $tag->last_posted_discussion_id);
+        $this->assertSame(1600001000, $tag->last_posted_at->getTimestamp());
+        $this->assertSame($newer->last_posted_user_id, (int) $tag->last_posted_user_id);
+
+        $emptyTag = Tag::find(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_TAG, 11));
+        $this->assertSame(0, (int) $emptyTag->discussion_count);
+        $this->assertNull($emptyTag->last_posted_discussion_id);
+    }
+
+    /**
+     * @test
+     */
     public function full_migration_pipeline_is_idempotent_across_two_runs()
     {
         $connector = new FakeConnector();
@@ -787,7 +906,7 @@ class PhorumMigrateCommandTest extends TestCase
         $connector->userGroupMap = [['user_id' => 1, 'group_id' => 1, 'status' => 1]];
         $connector->forums = [['forum_id' => 10, 'name' => 'Phorum General', 'description' => '', 'parent_id' => 0, 'display_order' => 1, 'pub_perms' => 1, 'reg_perms' => 15]];
         $connector->threadStartingMessages = [
-            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 0, 'closed' => 0],
+            ['forum_id' => 10, 'thread' => 100, 'user_id' => 1, 'subject' => 'Thread', 'status' => 2, 'sort' => 2, 'closed' => 0],
         ];
         $connector->threadMessages[100] = [
             ['message_id' => 1000, 'user_id' => 1, 'body' => 'Post', 'datestamp' => 1600000000, 'status' => 2],

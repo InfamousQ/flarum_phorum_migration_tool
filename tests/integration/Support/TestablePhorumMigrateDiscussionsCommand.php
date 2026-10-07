@@ -29,4 +29,9 @@ class TestablePhorumMigrateDiscussionsCommand extends PhorumMigrateDiscussionsCo
 
         return $this->importPhorumMessagesAsDiscussions($connector, $users, $tags);
     }
+
+    public function runPreflight(Connector $connector): bool
+    {
+        return $this->runPreflightChecks($connector);
+    }
 }
