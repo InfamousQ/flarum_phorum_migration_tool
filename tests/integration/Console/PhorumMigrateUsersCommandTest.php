@@ -2,6 +2,7 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Tests\integration\Console;
 
+use Flarum\Notification\Notification;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
@@ -144,5 +145,121 @@ class PhorumMigrateUsersCommandTest extends TestCase
         $this->expectException(\RuntimeException::class);
 
         $this->command()->runStep($connector);
+    }
+
+    /**
+     * @test
+     */
+    public function it_confirms_the_email_of_an_active_phorum_user_and_does_not_suspend_them()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0, 'message_count' => 5],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $alice = User::find($users[1]->id);
+        $this->assertTrue((bool) $alice->is_email_confirmed);
+        $this->assertNull($alice->suspended_until);
+    }
+
+    /**
+     * @test
+     */
+    public function it_skips_inactive_or_pending_phorum_users_without_messages()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Spammer', 'real_name' => '', 'email' => 'spam@example.com', 'active' => 0, 'admin' => 0, 'message_count' => 0],
+            // PHORUM_USER_PENDING_EMAIL
+            ['user_id' => 2, 'display_name' => 'Pending', 'real_name' => '', 'email' => 'pending@example.com', 'active' => -2, 'admin' => 0, 'message_count' => 0],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $this->assertSame([], $users);
+        $this->assertSame(0, User::query()->whereIn('email', ['spam@example.com', 'pending@example.com'])->count());
+        $this->assertNull(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_USER, 1));
+        $this->assertNull(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_USER, 2));
+    }
+
+    /**
+     * @test
+     */
+    public function it_imports_an_inactive_phorum_user_with_messages_as_indefinitely_suspended()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Deactivated', 'real_name' => '', 'email' => 'deactivated@example.com', 'active' => 0, 'admin' => 0, 'message_count' => 3],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $user = User::find($users[1]->id);
+        $this->assertSame('2038-01-01', $user->suspended_until->format('Y-m-d'));
+        $this->assertSame('Deactivated in Phorum', $user->suspend_reason);
+        $this->assertFalse((bool) $user->is_email_confirmed);
+    }
+
+    /**
+     * @test
+     */
+    public function it_sends_no_suspension_notification_and_opts_suspended_users_out_of_suspension_emails()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Deactivated', 'real_name' => '', 'email' => 'deactivated@example.com', 'active' => 0, 'admin' => 0, 'message_count' => 3],
+            ['user_id' => 2, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'alice@example.com', 'active' => 1, 'admin' => 0, 'message_count' => 3],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $this->assertSame(0, Notification::query()->count());
+
+        $suspended = User::find($users[1]->id);
+        $this->assertFalse($suspended->shouldEmail('userSuspended'));
+        $this->assertFalse($suspended->shouldEmail('userUnsuspended'));
+
+        // Active users keep Flarum's default preferences.
+        $active = User::find($users[2]->id);
+        $this->assertTrue($active->shouldEmail('userSuspended'));
+        $this->assertTrue($active->shouldEmail('userUnsuspended'));
+    }
+
+    /**
+     * @test
+     */
+    public function it_imports_an_inactive_phorum_user_with_an_unknown_message_count_as_suspended_rather_than_skipping()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Deactivated', 'real_name' => '', 'email' => 'deactivated@example.com', 'active' => 0, 'admin' => 0],
+        ];
+
+        $users = $this->command()->runStep($connector);
+
+        $this->assertNotNull(User::find($users[1]->id)->suspended_until);
+    }
+
+    /**
+     * @test
+     */
+    public function it_does_not_confirm_or_suspend_an_existing_flarum_user_matched_by_email()
+    {
+        // Someone registered on Flarum with this email but never confirmed it.
+        $existingUser = User::register('PreExisting', 'shared@example.com', 'password');
+        $existingUser->save();
+
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'shared@example.com', 'active' => 1, 'admin' => 0, 'message_count' => 5],
+        ];
+
+        $this->command()->runStep($connector);
+
+        $reloaded = User::find($existingUser->id);
+        $this->assertFalse((bool) $reloaded->is_email_confirmed);
+        $this->assertNull($reloaded->suspended_until);
     }
 }

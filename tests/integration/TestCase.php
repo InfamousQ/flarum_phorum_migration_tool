@@ -12,7 +12,7 @@ class TestCase extends FlarumConsoleTestCase
 
         // Dependencies must be enabled before the extension that depends on them,
         // since ExtensionManager::enable() checks getExtensionDependencyIds().
-        $this->extension('flarum-tags', 'flarum-sticky', 'flarum-lock', 'infamousq-phorum-migration-tool');
+        $this->extension('flarum-tags', 'flarum-sticky', 'flarum-lock', 'flarum-suspend', 'infamousq-phorum-migration-tool');
 
         $this->prepareDatabase([
             'phorum_mapping' => [],

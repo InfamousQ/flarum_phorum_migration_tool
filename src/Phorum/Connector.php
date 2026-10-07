@@ -45,7 +45,11 @@ class Connector {
 
 	public function getUsers() {
 		try {
-			$p_users_query = "SELECT user_id, display_name, real_name, email, active, admin FROM {$this->table_prefix}users ORDER BY user_id";
+			// message_count is counted from the messages table rather than taken from
+			// users.posts, which is a cached counter Phorum doesn't always keep in sync.
+			$p_users_query = "SELECT u.user_id, u.display_name, u.real_name, u.email, u.active, u.admin,"
+				. " (SELECT COUNT(*) FROM {$this->table_prefix}messages m WHERE m.user_id = u.user_id) AS message_count"
+				. " FROM {$this->table_prefix}users u ORDER BY u.user_id";
 			return $this->pdo->query($p_users_query);
 		} catch (\PDOException $pdo_exception) {
 			throw new ConnectorException('Could not query users from Phorum', 1, $pdo_exception);

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "7feb870e5a259b1a694282a14640363d",
+    "content-hash": "b67c961947e13b8d61fd26ba6f2f3326",
     "packages": [
         {
             "name": "axy/backtrace",
@@ -1506,6 +1506,85 @@
                 }
             ],
             "time": "2024-10-26T22:15:50+00:00"
+        },
+        {
+            "name": "flarum/suspend",
+            "version": "v1.8.6",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/flarum/suspend.git",
+                "reference": "714733095037974dcdef187b752f3688c28e96db"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/flarum/suspend/zipball/714733095037974dcdef187b752f3688c28e96db",
+                "reference": "714733095037974dcdef187b752f3688c28e96db",
+                "shasum": ""
+            },
+            "require": {
+                "flarum/core": "^1.8"
+            },
+            "require-dev": {
+                "flarum/testing": "^1.0.0"
+            },
+            "type": "flarum-extension",
+            "extra": {
+                "flarum-cli": {
+                    "modules": {
+                        "js": true,
+                        "css": true,
+                        "admin": true,
+                        "forum": true,
+                        "gitConf": true,
+                        "styleci": true,
+                        "jsCommon": false,
+                        "prettier": true,
+                        "typescript": false,
+                        "bundlewatch": false,
+                        "editorConfig": true,
+                        "githubActions": true,
+                        "backendTesting": true
+                    }
+                },
+                "branch-alias": {
+                    "dev-main": "1.x-dev"
+                },
+                "flarum-extension": {
+                    "icon": {
+                        "name": "fas fa-ban",
+                        "color": "#666",
+                        "backgroundColor": "#ddd"
+                    },
+                    "title": "Suspend",
+                    "category": "feature"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Flarum\\Suspend\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Suspend users so they can't post.",
+            "homepage": "https://flarum.org",
+            "keywords": [
+                "moderation"
+            ],
+            "support": {
+                "forum": "https://discuss.flarum.org",
+                "issues": "https://github.com/flarum/framework/issues",
+                "source": "https://github.com/flarum/suspend"
+            },
+            "funding": [
+                {
+                    "url": "https://flarum.org/donate/",
+                    "type": "website"
+                }
+            ],
+            "time": "2026-03-06T17:41:07+00:00"
         },
         {
             "name": "flarum/tags",
