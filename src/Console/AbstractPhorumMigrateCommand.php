@@ -40,6 +40,16 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	const PHORUM_ALLOW_REPLY = 2;
 	const PHORUM_ALLOW_NEW_TOPIC = 8;
 
+	/** Phorum's PHORUM_USER_ACTIVE (include/api/user.php). Anything else is inactive or pending. */
+	const PHORUM_USER_ACTIVE = 1;
+
+	/** flarum/suspend's representation of an indefinite suspension (see its suspensionHelper) */
+	const SUSPENDED_INDEFINITELY_UNTIL = '2038-01-01 00:00:00';
+	const INACTIVE_SUSPEND_REASON = 'Deactivated in Phorum';
+
+	/** flarum/suspend's notification types (UserSuspendedBlueprint/UserUnsuspendedBlueprint::getType()) */
+	const SUSPEND_NOTIFICATION_TYPES = ['userSuspended', 'userUnsuspended'];
+
 	/** @var SettingsRepositoryInterface */
 	protected $settings;
 
@@ -158,6 +168,17 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				continue;
 			}
 
+			// Fail closed on a missing `active` (treat as inactive), but fail open on a
+			// missing message count (assume messages exist) so no authorship is dropped.
+			$p_is_active = (int) ($p_user_row['active'] ?? 0) === self::PHORUM_USER_ACTIVE;
+			$p_has_messages = !isset($p_user_row['message_count']) || (int) $p_user_row['message_count'] > 0;
+			if (!$p_is_active && !$p_has_messages) {
+				// Deactivated or never-confirmed account that never posted - in practice
+				// almost always a spam sign-up. Nothing references it, so don't create it.
+				$this->output->writeln("Phorum user {$phorum_user_id} - Skipped, inactive with no messages");
+				continue;
+			}
+
 			$existing = false;
 			// No existing mapped user, see if we have user with same email already
 			$user = User::where(['email' => $p_user_row['email']])->first();
@@ -166,7 +187,29 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				// Phorum's password hashes aren't carried over, so give the account an
 				// unguessable random password - users regain access via "forgot password".
 				$user = User::register($username, $p_user_row['email'], Str::random(40));
+				if ($p_is_active) {
+					// Phorum only activates an account once it has passed sign-up
+					// verification. Without this Flarum treats the user as a guest
+					// (no Member or group permissions) until they confirm again.
+					$user->is_email_confirmed = true;
+				} else {
+					// Inactive in Phorum but has messages: keep the account so the
+					// messages keep their author, but block it from doing anything.
+					$user->suspended_until = Carbon::parse(self::SUSPENDED_INDEFINITELY_UNTIL);
+					$user->suspend_reason = self::INACTIVE_SUSPEND_REASON;
+					// Setting the columns directly sends no notification (flarum/suspend only
+					// notifies when a suspension is changed through Flarum's user-edit flow).
+					// Also opt the user out of suspend/unsuspend emails, so a later change
+					// to this suspension in the admin panel doesn't email someone who left
+					// Phorum. Flarum checks this preference, not is_email_confirmed.
+					foreach (self::SUSPEND_NOTIFICATION_TYPES as $type) {
+						$user->setPreference(User::getNotificationPreferenceKey($type, 'email'), false);
+					}
+				}
 			} else {
+				// Merged into an account that already existed in Flarum: its confirmation
+				// and suspension state are left untouched. Confirming it here would hand
+				// whoever registered it a verified account carrying the Phorum identity.
 				$existing = true; // This use previously existed already!
 				$username = $this->resolveUsername($p_user_row['display_name'], $user->id);
 				$user->rename($username);
