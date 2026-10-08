@@ -376,4 +376,39 @@ class PhorumMigratePostsCommandTest extends TestCase
             (int) PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, 1000)
         );
     }
+
+    /**
+     * Posts are bulk-inserted, so the migration numbers them itself: from 1 in a new
+     * discussion, and after any reply already written in Flarum on a later run.
+     *
+     * @test
+     */
+    public function it_numbers_posts_in_order_and_after_existing_replies_on_a_rerun()
+    {
+        $connector = new FakeConnector();
+        $discussions = $this->fixtureDiscussion($connector);
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+            ['message_id' => 1001, 'user_id' => 1, 'body' => 'Second post', 'datestamp' => 1600003600, 'status' => -2],
+        ];
+        $this->command()->runStep($connector);
+
+        $discussion = Discussion::find($discussions[100]);
+        $this->assertSame([1, 2], $discussion->posts()->orderBy('number')->pluck('number')->all());
+
+        // A reply written in Flarum, then a new Phorum message migrated after it
+        // Numbered explicitly: Post's model hooks that would number it don't always fire under the test harness
+        $reply = \Flarum\Post\CommentPost::reply($discussion->id, 'Written in Flarum', $discussion->user_id, '127.0.0.1');
+        $reply->number = 3;
+        $reply->save();
+        $connector->threadMessages[100][] = ['message_id' => 1002, 'user_id' => 1, 'body' => 'Third post', 'datestamp' => 1600007200, 'status' => 2];
+        $this->command()->runStep($connector);
+
+        $newPost = Post::find(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, 1002));
+        $this->assertSame(4, $newPost->number);
+        $this->assertSame('Third post', $newPost->content);
+        $this->assertSame(1600007200, $newPost->created_at->getTimestamp());
+        $this->assertNotNull(Post::find(PhorumMapping::getFlarumIdForPhorumId(PhorumMapping::DATA_TYPE_MESSAGE, 1001))->hidden_at);
+        $this->assertSame(4, Post::where('discussion_id', $discussion->id)->count());
+    }
 }

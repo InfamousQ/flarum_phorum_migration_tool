@@ -19,6 +19,7 @@ use Flarum\Tags\Tag;
 use Flarum\User\User;
 use InfamousQ\FlarumPhorumMigrationTool\Model\HistoricCommentPost;
 use Carbon\Carbon;
+use Illuminate\Hashing\BcryptHasher;
 use Illuminate\Support\Str;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
@@ -251,9 +252,8 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$user = User::where(['email' => $p_user_row['email']])->first();
 			if (null === $user) {
 				$username = $this->resolveUsername($desired_username, null);
-				// Phorum's password hashes aren't carried over, so give the account an
-				// unguessable random password - users regain access via "forgot password".
-				$user = User::register($username, $p_user_row['email'], Str::random(40));
+				// Phorum's password hashes aren't carried over - users regain access via "forgot password"
+				$user = $this->registerWithUnusablePassword($username, $p_user_row['email']);
 				if ($p_is_active) {
 					// Phorum only activates an account once it has passed sign-up
 					// verification. Without this Flarum treats the user as a guest
@@ -282,6 +282,24 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		}
 
 		return $users_created;
+	}
+
+	/**
+	 * User::register(), but with a random password nobody is ever told, so the account
+	 * can only be signed in to after a password reset.
+	 *
+	 * The password is hashed with bcrypt's lowest cost instead of Flarum's default,
+	 * which takes ~60x as long and dominated the users step (~60 ms per user). The
+	 * cost only slows down guessing of weak, human-chosen passwords; 40 random
+	 * characters can't be guessed at any cost. The hash is still an ordinary bcrypt
+	 * hash, unique per user, and is replaced at the default cost on a password reset.
+	 */
+	protected function registerWithUnusablePassword(string $username, string $email) : User {
+		// An empty password skips User's hashing mutator, the hash is set right after
+		$user = User::register($username, $email, '');
+		$user->setRawAttributes(['password' => (new BcryptHasher(['rounds' => 4]))->make(Str::random(40))] + $user->getAttributes());
+
+		return $user;
 	}
 
 	/**
@@ -352,7 +370,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			$user = User::where('email', self::GUEST_EMAIL)->first();
 		}
 		if (null === $user) {
-			$user = User::register($this->resolveUsername(self::GUEST_USERNAME, null), self::GUEST_EMAIL, Str::random(40));
+			$user = $this->registerWithUnusablePassword($this->resolveUsername(self::GUEST_USERNAME, null), self::GUEST_EMAIL);
 			$this->suspendIndefinitely($user, self::GUEST_SUSPEND_REASON);
 			$user->saveOrFail();
 			$this->output->writeln("Phorum guest messages - Generated placeholder Flarum user {$user->id}");
@@ -753,7 +771,7 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 			);
 		}
 
-		$this->refreshUserPostCounts($users);
+		$this->refreshUserPostCounts();
 		// The last posted discussion depends on the posts imported above
 		$this->refreshTagCounters();
 	}
@@ -831,26 +849,33 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 	 * created by the migration otherwise "joined" years after writing their posts.
 	 * A join date already earlier than the first post is kept.
 	 *
-	 * @param User[] $users
+	 * Done as two set-based UPDATEs over every user in phorum_mapping (the guest
+	 * placeholder included) rather than per user, so it takes the same few queries
+	 * however many users were migrated, and needs no list of ids that could hit
+	 * MySQL's limit of 65535 placeholders per statement.
 	 */
-	protected function refreshUserPostCounts(array $users) {
-		$first_posted_at = Post::query()
-			->whereIn('user_id', array_map(function (User $user) {
-				return $user->id;
-			}, $users))
-			->groupBy('user_id')
-			->selectRaw('user_id, MIN(created_at) AS first_posted_at')
-			->pluck('first_posted_at', 'user_id')
-			->all();
+	protected function refreshUserPostCounts() {
+		$connection = PhorumMapping::query()->getConnection();
+		$prefix = $connection->getTablePrefix();
+		$migrated_user_ids = "SELECT DISTINCT flarum_id FROM {$prefix}phorum_mapping WHERE phorum_data_type = ?";
 
-		foreach ($users as $user) {
-			$user->refreshCommentCount()->refreshDiscussionCount();
-			$first_post_date = isset($first_posted_at[$user->id]) ? Carbon::parse($first_posted_at[$user->id]) : null;
-			if (null !== $first_post_date && (null === $user->joined_at || $first_post_date->lt($user->joined_at))) {
-				$user->joined_at = $first_post_date;
-			}
-			$user->save();
-		}
+		// Same counter definitions as User::refreshCommentCount() / refreshDiscussionCount()
+		$connection->update(
+			"UPDATE {$prefix}users AS u"
+			. " JOIN ({$migrated_user_ids}) AS m ON m.flarum_id = u.id"
+			. " SET u.comment_count = (SELECT COUNT(*) FROM {$prefix}posts AS p WHERE p.user_id = u.id AND p.type = 'comment' AND p.is_private = 0),"
+			. " u.discussion_count = (SELECT COUNT(*) FROM {$prefix}discussions AS d WHERE d.user_id = u.id AND d.is_private = 0)",
+			[PhorumMapping::DATA_TYPE_USER]
+		);
+
+		$connection->update(
+			"UPDATE {$prefix}users AS u"
+			. " JOIN (SELECT p.user_id, MIN(p.created_at) AS first_posted_at FROM {$prefix}posts AS p"
+			. " JOIN ({$migrated_user_ids}) AS m ON m.flarum_id = p.user_id GROUP BY p.user_id) AS fp ON fp.user_id = u.id"
+			. " SET u.joined_at = fp.first_posted_at"
+			. " WHERE u.joined_at IS NULL OR fp.first_posted_at < u.joined_at",
+			[PhorumMapping::DATA_TYPE_USER]
+		);
 	}
 
 	/**
@@ -876,7 +901,8 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 		return PhorumMapping::query()->getConnection()->transaction(function () use ($discussion, &$users, $p_thread_messages, &$message_id_to_post_id) {
 			/** @var Post[] $posts */
 			$posts = [];
-			$new_mappings = [];
+			/** @var array $pending_posts List of ['post' => unsaved HistoricCommentPost, 'message_id' => ] awaiting bulk insert */
+			$pending_posts = [];
 			foreach ($p_thread_messages as $p_msg) {
 				$p_message_id = $p_msg['message_id'] ?? null;
 				$p_user_id = $p_msg['user_id'] ?? null;
@@ -897,15 +923,12 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 				$post_id = $message_id_to_post_id[$p_message_id] ?? null;
 				/** @var \Flarum\Post\CommentPost $post */
 				if (null === $post_id) {
+					// Only built here, inserted together with the rest of the thread's new posts below
 					$post = HistoricCommentPost::replyAtTime($discussion->id, $p_body, $author_user->id, '127.0.0.1', $p_created, $author_user);
-					$post->save();
-					$message_id_to_post_id[$p_message_id] = $post->id;
-					$new_mappings[] = [
-						'phorum_data_type' => PhorumMapping::DATA_TYPE_MESSAGE,
-						'phorum_id' => (int) $p_message_id,
-						'flarum_id' => (int) $post->id,
-						'existing' => false,
-					];
+					if ($p_is_hidden) {
+						$post->hide();
+					}
+					$pending_posts[] = ['post' => $post, 'message_id' => (int) $p_message_id];
 				} else {
 					$post = $discussion->posts->find($post_id);
 					if (null === $post) {
@@ -913,23 +936,17 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 						$this->logger->critical('Post linked to wrong Discussion', ['post id' => $post_id, 'discussion id' => $discussion->id]);
 						continue;
 					}
+					if ($p_is_hidden) {
+						$post
+							->hide()
+							->save();
+					}
 				}
 
-				if ($p_is_hidden) {
-					$post
-						->hide()
-						->save();
-				}
 				$posts[] = $post;
 			}
 
-			if (!empty($new_mappings)) {
-				// Drop stale rows left by messages whose post was deleted in Flarum
-				PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
-					->whereIn('phorum_id', array_column($new_mappings, 'phorum_id'))
-					->delete();
-				PhorumMapping::insert($new_mappings);
-			}
+			$this->insertPendingPosts($discussion->id, $pending_posts, $message_id_to_post_id);
 
 			if (!empty($posts)) {
 				$discussion->setFirstPost(reset($posts));
@@ -947,5 +964,75 @@ abstract class AbstractPhorumMigrateCommand extends AbstractCommand implements L
 
 			return $posts;
 		});
+	}
+
+	/**
+	 * Bulk-insert one thread's new posts, instead of saving each through Eloquent.
+	 * Saving a post runs Post's `created` hook, which reloads the post, its author and
+	 * its discussion: three extra queries per post that made up most of this step's
+	 * time. Like the bulk-inserted discussions, this bypasses Post's model events;
+	 * Flarum's Posted event already wasn't dispatched for migrated posts.
+	 *
+	 * Does what that `creating` hook would: numbers the posts after the discussion's
+	 * current last post. Like bulkInsertAndGetFirstId(), this relies on nothing else
+	 * posting to the discussion meanwhile; posts' unique (discussion_id, number) index
+	 * makes the transaction fail rather than misnumber if something does.
+	 *
+	 * @param int $discussion_id
+	 * @param array $pending_posts List of ['post' => unsaved HistoricCommentPost, 'message_id' => ], in order.
+	 *   Each post gets its id and number, and is marked as existing.
+	 * @param int[] $message_id_to_post_id Phorum message id => Flarum post id, new ones are added
+	 */
+	protected function insertPendingPosts(int $discussion_id, array $pending_posts, array &$message_id_to_post_id) {
+		if (empty($pending_posts)) {
+			return;
+		}
+
+		$connection = PhorumMapping::query()->getConnection();
+		$number = (int) $connection->table('posts')->where('discussion_id', $discussion_id)->max('number');
+		// Chunked so a long thread's bodies don't make one statement exceed max_allowed_packet
+		foreach (array_chunk($pending_posts, 200) as $chunk) {
+			$rows = [];
+			foreach ($chunk as $pending) {
+				/** @var HistoricCommentPost $post */
+				$post = $pending['post'];
+				$post->number = ++$number;
+				$attributes = $post->getAttributes();
+				// Every row must carry the same columns for the bulk insert
+				$rows[] = [
+					'discussion_id' => $attributes['discussion_id'],
+					'number' => $attributes['number'],
+					'created_at' => $attributes['created_at'],
+					'user_id' => $attributes['user_id'],
+					'type' => $attributes['type'],
+					'content' => $attributes['content'],
+					'ip_address' => $attributes['ip_address'],
+					'hidden_at' => $attributes['hidden_at'] ?? null,
+					'hidden_user_id' => $attributes['hidden_user_id'] ?? null,
+				];
+			}
+
+			$first_id = $this->bulkInsertAndGetFirstId('posts', $rows);
+			$mapping_rows = [];
+			foreach ($chunk as $i => $pending) {
+				$post = $pending['post'];
+				$post->id = $first_id + $i;
+				$post->exists = true;
+				$post->syncOriginal();
+				$message_id_to_post_id[$pending['message_id']] = $post->id;
+				$mapping_rows[] = [
+					'phorum_data_type' => PhorumMapping::DATA_TYPE_MESSAGE,
+					'phorum_id' => $pending['message_id'],
+					'flarum_id' => $post->id,
+					'existing' => false,
+				];
+			}
+
+			// Drop stale rows left by messages whose post was deleted in Flarum
+			PhorumMapping::where('phorum_data_type', PhorumMapping::DATA_TYPE_MESSAGE)
+				->whereIn('phorum_id', array_column($mapping_rows, 'phorum_id'))
+				->delete();
+			PhorumMapping::insert($mapping_rows);
+		}
 	}
 }

@@ -4,6 +4,7 @@ namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
 use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
 use InfamousQ\FlarumPhorumMigrationTool\Preflight\AutoIncrementCheck;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\DuplicateEmailCheck;
 
 /**
  * Runs the full Phorum-to-Flarum migration pipeline in one shot: groups, users,
@@ -22,8 +23,11 @@ class PhorumMigrateCommand extends AbstractPhorumMigrateCommand {
 	}
 
 	protected function preflightChecks() : array {
-		// This step bulk-inserts discussions
-		return array_merge(parent::preflightChecks(), [new AutoIncrementCheck(PhorumMapping::query()->getConnection())]);
+		// This step imports users and bulk-inserts discussions and posts
+		return array_merge(parent::preflightChecks(), [
+			new DuplicateEmailCheck(),
+			new AutoIncrementCheck(PhorumMapping::query()->getConnection()),
+		]);
 	}
 
 	protected function fire() {
