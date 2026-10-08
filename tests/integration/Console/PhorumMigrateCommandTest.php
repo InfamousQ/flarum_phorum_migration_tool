@@ -103,6 +103,13 @@ class PhorumMigrateCommandTest extends TestCase
         $this->assertFalse($users[1]->checkPassword('test'));
         $this->assertFalse($users[2]->checkPassword('test'));
         $this->assertNotSame($users[1]->password, $users[2]->password);
+        $this->assertSame('bcrypt', password_get_info($users[1]->password)['algoName']);
+
+        // A password reset hashes the new password at Flarum's normal cost, and it works
+        $user = User::find($users[1]->id);
+        $user->changePassword('new-password')->save();
+        $this->assertTrue(User::find($users[1]->id)->checkPassword('new-password'));
+        $this->assertNotSame('$2y$04$', substr(User::find($users[1]->id)->password, 0, 7));
     }
 
     /**
@@ -814,6 +821,52 @@ class PhorumMigrateCommandTest extends TestCase
         $command->runImportPhorumMessages($connector, $discussions, $users);
 
         $this->assertSame(1600000000, User::find($users[1]->id)->joined_at->getTimestamp());
+    }
+
+    /**
+     * @test
+     */
+    public function it_keeps_a_join_date_that_is_already_earlier_than_the_first_post()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $discussions] = $this->fixtureDiscussion($connector, $command);
+        User::query()->where('id', $users[1]->id)->update(['joined_at' => '2000-01-01 00:00:00']);
+
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+        ];
+
+        $command->runImportPhorumMessages($connector, $discussions, $users);
+
+        $this->assertSame('2000-01-01 00:00:00', User::find($users[1]->id)->joined_at->format('Y-m-d H:i:s'));
+    }
+
+    /**
+     * @test
+     */
+    public function it_leaves_the_counters_and_join_date_of_flarum_users_that_were_not_migrated_alone()
+    {
+        $connector = new FakeConnector();
+        $command = $this->command();
+        [$users, $discussions] = $this->fixtureDiscussion($connector, $command);
+        $outsider = User::register('outsider', 'outsider@example.com', 'password');
+        $outsider->comment_count = 99;
+        $outsider->discussion_count = 99;
+        $outsider->joined_at = '2025-01-01 00:00:00';
+        $outsider->save();
+
+        $connector->threadMessages[100] = [
+            ['message_id' => 1000, 'user_id' => 1, 'body' => 'First post', 'datestamp' => 1600000000, 'status' => 2],
+        ];
+
+        $command->runImportPhorumMessages($connector, $discussions, $users);
+
+        $outsider = User::find($outsider->id);
+        $this->assertSame(99, $outsider->comment_count);
+        $this->assertSame(99, $outsider->discussion_count);
+        $this->assertSame('2025-01-01 00:00:00', $outsider->joined_at->format('Y-m-d H:i:s'));
+        $this->assertSame(1, User::find($users[1]->id)->comment_count);
     }
 
     // --- Full pipeline -------------------------------------------------------

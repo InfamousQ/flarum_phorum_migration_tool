@@ -2,6 +2,8 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\DuplicateEmailCheck;
+
 /**
  * Step 2 of the migration pipeline: import Phorum users as Flarum users (either
  * a brand new account, or matched to a pre-existing Flarum account by email).
@@ -17,6 +19,10 @@ class PhorumMigrateUsersCommand extends AbstractPhorumMigrateCommand {
 		$this
 			->setName('phorum:migrate:users')
 			->setDescription('Migrate step 2/6: import Phorum users as Flarum users');
+	}
+
+	protected function preflightChecks() : array {
+		return array_merge(parent::preflightChecks(), [new DuplicateEmailCheck()]);
 	}
 
 	protected function fire() {

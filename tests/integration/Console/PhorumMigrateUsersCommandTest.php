@@ -277,4 +277,21 @@ class PhorumMigrateUsersCommandTest extends TestCase
         $this->assertFalse((bool) $reloaded->is_email_confirmed);
         $this->assertNull($reloaded->suspended_until);
     }
+
+    /**
+     * @test
+     */
+    public function its_preflight_checks_stop_the_migration_when_phorum_users_share_an_email()
+    {
+        $connector = new FakeConnector();
+        $connector->users = [
+            ['user_id' => 1, 'display_name' => 'Alice', 'real_name' => '', 'email' => 'shared@example.com', 'active' => 1, 'admin' => 0],
+            ['user_id' => 2, 'display_name' => 'Bob', 'real_name' => '', 'email' => 'shared@example.com', 'active' => 1, 'admin' => 0],
+        ];
+
+        $command = $this->command();
+
+        $this->assertFalse($command->runPreflight($connector));
+        $this->assertStringContainsString('Phorum users 1, 2 share the email address', $command->bufferedOutput->fetch());
+    }
 }

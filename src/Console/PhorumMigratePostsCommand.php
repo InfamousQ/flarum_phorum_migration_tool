@@ -2,6 +2,9 @@
 
 namespace InfamousQ\FlarumPhorumMigrationTool\Console;
 
+use InfamousQ\FlarumPhorumMigrationTool\Model\PhorumMapping;
+use InfamousQ\FlarumPhorumMigrationTool\Preflight\AutoIncrementCheck;
+
 /**
  * Step 6 of the migration pipeline: import every Phorum message as a Flarum
  * post. Requires phorum:migrate:users and phorum:migrate:discussions to have
@@ -17,6 +20,11 @@ class PhorumMigratePostsCommand extends AbstractPhorumMigrateCommand {
 		$this
 			->setName('phorum:migrate:posts')
 			->setDescription('Migrate step 6/6: import Phorum messages as posts (requires phorum:migrate:users and phorum:migrate:discussions to have run first)');
+	}
+
+	protected function preflightChecks() : array {
+		// This step bulk-inserts posts
+		return array_merge(parent::preflightChecks(), [new AutoIncrementCheck(PhorumMapping::query()->getConnection())]);
 	}
 
 	protected function fire() {

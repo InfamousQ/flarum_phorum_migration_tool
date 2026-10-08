@@ -47,7 +47,8 @@ Each step can also be run on its own: `phorum:migrate:groups`, `phorum:migrate:u
 Before `phorum:migrate`, `phorum:migrate:users`, `phorum:migrate:discussions` or `phorum:migrate:posts` writes anything, it runs pre-flight checks against the Phorum data and the Flarum database, and stops with a list of every problem found. Fix them and run the command again. Currently checked:
 
 * Usernames: a Phorum user whose username and `<username>_migrated` are both already taken in Flarum (or by another Phorum user in the same run). Rename one of the clashing users.
-* Auto-increment step (`phorum:migrate` and `phorum:migrate:discussions` only): the Flarum database must have `auto_increment_increment = 1`, since discussions are bulk-inserted and their ids derived from the first one. Galera / MariaDB Cluster and multi-primary replication often use a larger step; set it to 1 while migrating (on Galera, also turn `wsrep_auto_increment_control` off and migrate against a single node).
+* Duplicate emails (`phorum:migrate` and `phorum:migrate:users` only): Phorum users that share an email address (compared case-insensitively, empty emails included). Users are matched to Flarum accounts by email, so they would all be merged into one account. Give each of them their own email address in Phorum.
+* Auto-increment step (`phorum:migrate`, `phorum:migrate:discussions` and `phorum:migrate:posts` only): the Flarum database must have `auto_increment_increment = 1`, since discussions and posts are bulk-inserted and their ids derived from the first one. Galera / MariaDB Cluster and multi-primary replication often use a larger step; set it to 1 while migrating (on Galera, also turn `wsrep_auto_increment_control` off and migrate against a single node).
 
 ## How data is converted
 
@@ -62,6 +63,10 @@ Before `phorum:migrate`, `phorum:migrate:users`, `phorum:migrate:discussions` or
 * Edit user groups, mark those that you wish to hide from public
 * Mark tags as hidden in Flarum admin UI
 * Migrated users can use password reset tool to update their passwords.
+
+## Known issues
+
+* Nested `[size]`, `[sub]` or `[sup]` BBCode tags are not converted correctly. For example `[size=large]a [size=small]b[/size] c[/size]` keeps the inner `[size=small]` as literal text, and a nested tag inside `[size=medium]` can leave an unmatched `[/size]` behind. Posts like these need to be fixed by hand after migration.
 
 # Undoing migration
 

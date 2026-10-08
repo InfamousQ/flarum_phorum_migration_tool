@@ -69,7 +69,7 @@ class Connector {
 			$p_user_group_query = "SELECT user_id, group_id, status FROM {$this->table_prefix}user_group_xref ORDER BY user_id, group_id";
 			return $this->pdo->query($p_user_group_query);
 		} catch (\PDOException $pdo_exception) {
-			throw new ConnectorException('Could not query users from Phorum', 1, $pdo_exception);
+			throw new ConnectorException('Could not query user group memberships from Phorum', 1, $pdo_exception);
 		}
 	}
 
